@@ -3,12 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from utils import RK4_multistep_integrator, multisine_generator
 
-
 """
 Purpose: Generate input/output data for multiple connected mass spring dampers.
 """
-print("start")
-
 
 # Define system properties
 class coupled_MSD():

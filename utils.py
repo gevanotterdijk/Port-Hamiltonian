@@ -15,6 +15,7 @@ def multisine_generator(t, freq_band, amplitude, n_states):
     for state in range(n_states):
         for freq in freq_band:
             phase = 2*torch.pi*torch.rand(1)
-            wave = amplitude*torch.sin(2*torch.pi*freq*t + phase)
+            wave = torch.sin(2*torch.pi*freq*t + phase)
             u[:, state] = u[:, state] + wave
+    u = u*(amplitude/torch.max(u))
     return u

@@ -129,7 +129,7 @@ class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
 
 class var_J_net(nn.Module):
     def __init__(self, system_dim, net=feed_forward_nn, net_kwargs={}):
-        super()._init__()
+        super().__init__()
         self.system_dim = system_dim
         self.xc_dim = np.sum(system_dim, 0)[0]
         self.net_list = nn.ModuleList()
@@ -138,7 +138,7 @@ class var_J_net(nn.Module):
         for sys, dim in enumerate(system_dim):
             nJ = int((dim[0]**2 - dim[0]) / 2)
             if nJ > 0:  # To avoid the single state system, where J has 0 elements
-                self.net_list.append(net(n_in=dim[0]), n_out=nJ, **net_kwargs)
+                self.net_list.append(net(n_in=dim[0], n_out=nJ, **net_kwargs))
     
     def forward(self, x):
         batch_size = x.shape[0]

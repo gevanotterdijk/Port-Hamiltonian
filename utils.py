@@ -141,7 +141,7 @@ class constant_J_net(nn.Module):
         self.J_vals = nn.Parameter(data=torch.rand(self.nJ), requires_grad=True) #TODO: Think about normalization (to fix stuff like R >> J)
 
     def forward(self, x):
-        return blockify_J(self.system_dim, self.J_vals)
+        return blockify_J(self.system_dim, self.J_vals.view(1, -1))
 
 
 class constant_R_net(nn.Module):
@@ -155,7 +155,7 @@ class constant_R_net(nn.Module):
         self.R_vals = nn.Parameter(data=torch.rand(self.nR), requires_grad=True)  #TODO: Think about normalization (to fix stuff like R >> J)
     
     def forward(self, x):
-        return blockify_R(self.system_dim, self.R_vals)
+        return blockify_R(self.system_dim, self.R_vals.view(1, -1))
 
 
 class constant_G_net(nn.Module):
@@ -169,7 +169,7 @@ class constant_G_net(nn.Module):
         self.G_vals = nn.Parameter(data=torch.rand(self.nG), requires_grad=True) #TODO: Think about normalization (to fix stuff like u >> x)
     
     def forward(self, x):
-        return blockify_G(self.system_dim, self.G_vals)
+        return blockify_G(self.system_dim, self.G_vals.view(1, -1))
 
 
 class constant_H_net(nn.Module):

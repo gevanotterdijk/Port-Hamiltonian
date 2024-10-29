@@ -3,6 +3,7 @@ import numpy as np
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
+
 ### General utility ###
 def RK4_multistep_integrator(deriv, dt, x, n_steps=1):
     for _ in range(n_steps):
@@ -12,6 +13,7 @@ def RK4_multistep_integrator(deriv, dt, x, n_steps=1):
         k4 = (dt/n_steps) * deriv(x+k3)         # t=dt
         x = x + (k1 + 2*k2 + 2*k3 + k4)/6
     return x
+
 
 def multisine_generator(t, freq_band, amplitude, n_states):
     u = torch.zeros(len(t), n_states)
@@ -107,7 +109,7 @@ def blockify_H(system_dim, theta):
     return H_mat
 
 
-### Variable PHNN subnetworks ###
+### General NN structures ###
 class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
     def __init__(self,n_in=6, n_out=5, n_nodes_per_layer=64, n_hidden_layers=2, activation=nn.Tanh):
         super(feed_forward_nn,self).__init__()
@@ -127,6 +129,61 @@ class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
         return self.net(X)  
 
 
+### State-independent PHNN subnetworks ###
+class constant_J_net(nn.Module):
+    def __init__(self, system_dim):
+        super().__init__()
+        self.system_dim = system_dim
+        self.nJ = 0
+
+        for dim in system_dim:
+            self.nJ += int((dim[0]**2 - dim[0]) / 2)
+        self.J_vals = nn.Parameter(data=torch.rand(self.nJ), requires_grad=True) #TODO: Think about normalization (to fix stuff like R >> J)
+
+    def forward(self, x):
+        return blockify_J(self.system_dim, self.J_vals)
+
+
+class constant_R_net(nn.Module):
+    def __init__(self, system_dim):
+        super().__init__()
+        self.system_dim = system_dim
+        self.nR = 0
+
+        for dim in system_dim:
+            self.nR += dim[0]*dim[0]
+        self.R_vals = nn.Parameter(data=torch.rand(self.nR), requires_grad=True)  #TODO: Think about normalization (to fix stuff like R >> J)
+    
+    def forward(self, x):
+        return blockify_R(self.system_dim, self.R_vals)
+
+
+class constant_G_net(nn.Module):
+    def __init__(self, system_dim):
+        super().__init__()
+        self.system_dim = system_dim
+        self.nG = 0
+
+        for dim in system_dim:
+            self.nG += dim[0]*dim[1]
+        self.G_vals = nn.Parameter(data=torch.rand(self.nG), requires_grad=True) #TODO: Think about normalization (to fix stuff like u >> x)
+    
+    def forward(self, x):
+        return blockify_G(self.system_dim, self.G_vals)
+
+
+class constant_H_net(nn.Module):
+    def __init__(self, system_dim):
+        super().__init__()
+        self.system_dim = system_dim
+        self.nH = np.sum(system_dim, 0)[0]
+        self.H_vals = nn.Parameter(data=torch.rand(self.nH), requires_grad=True)
+    
+    def forward(self, x):
+        return torch.einsum("i, bi -> bi", self.H_vals, x)
+
+
+### Variable PHNN subnetworks ###
 class var_J_net(nn.Module):
     def __init__(self, system_dim, net=feed_forward_nn, net_kwargs={}):
         super().__init__()

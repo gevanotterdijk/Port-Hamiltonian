@@ -58,6 +58,14 @@ class coupled_MSD():
         print(type(self.n_systems))
         print(f"MDK Matrix: {self.system_MDK}")
         print(type(self.system_MDK))
+        print(f"Composite J matrix: {self.J}")
+        print(self.J.shape)
+        print(f"Composite R matrix: {self.R}")
+        print(self.R.shape)
+        print(f"Composite G matrix: {self.G}")
+        print(self.G.shape)
+        print(f"Composite C matrix: {self.C}")
+        print(self.C.shape)
 
 # Simulation of the coupled MSD system
 def run_sim(sim_time, sys:coupled_MSD, x0:torch.FloatTensor, u_ext:torch.FloatTensor):
@@ -72,35 +80,54 @@ def run_sim(sim_time, sys:coupled_MSD, x0:torch.FloatTensor, u_ext:torch.FloatTe
 
 
 if __name__ == "__main__":
-    # Initialise a test system
+    # Dataset properties
+    sim_time = torch.linspace(0, 800, 8192)
+    noise = True
+    n_datasets = 2
+
+    # System properties
     # Declare MSD settings in the form [Mass, Damping, Spring] constants
     S1 = [2, 0.5, 1]
-    S2 = [5, 0.2, 1]
-    S3 = [2, 0.7, 1]
-    S4 = [5, 0.1, 1]
-    system_tensor = torch.FloatTensor([S1, S2, S3, S4])
-    sys = coupled_MSD(system_tensor.shape[0], system_tensor)
+    S2 = [2, 0.5, 1]
+    S3 = [2, 0.5, 1]
+    system_tensor = torch.FloatTensor([S1])
+    n_systems = system_tensor.shape[0]
+    sys = coupled_MSD(n_systems, system_tensor)
+    x0 = torch.zeros(n_systems*2)
+    freq_band = torch.linspace(0.1, 7, 40)
 
-    # Example simulation:
-    sim_time = torch.linspace(0, 20, 1001)
-    x0 = torch.FloatTensor([1, 2, 3, 4, 5, 6, 7, 8])
+    # Generate the datasets
+    datasets = torch.zeros(n_datasets, 3, sim_time.shape[0], 2*n_systems)
+    input_mask = torch.zeros(2*n_systems)
+    input_mask[1] = 1
+    for i in range(0, n_datasets):
+        # Generate input signal
+        u = multisine_generator(sim_time, freq_band, amplitude=5, n_states=2*system_tensor.shape[0])
+        inputs = torch.einsum("ij, j -> ij", u, input_mask)
 
-    # Generate random phase multisine input
-    freq_band = torch.linspace(0, 1, 7)
-    inputs = multisine_generator(sim_time, freq_band, amplitude=7, n_states=2*system_tensor.shape[0])
-    input_mask = torch.FloatTensor([0, 1, 0, 1, 0, 1, 0, 1])  # Determine which states have an input
-    u = torch.einsum("ij, j -> ij", inputs, input_mask)
-
-    # Run the simulation
-    states, outputs = run_sim(sim_time, sys, x0, u)
+        # Apply input and capture output
+        states, outputs = run_sim(sim_time, sys, x0, inputs)
+        if noise == True:
+            max_out = torch.max(outputs)
+            print(f"STD of noise at: {0.025}, max= {max_out}")
+            noisy_outputs = (0.025*torch.randn_like(outputs) - 0.0125*max_out*torch.ones_like(outputs)) + outputs
+            datasets[i, :, :, :] = torch.stack([inputs, states, noisy_outputs])
+        else:
+            datasets[i, :, :, :] = torch.stack([inputs, states, outputs])
 
     # Plot the system behaviour
-    fig, (ax0, ax1, ax2, ax3) = plt.subplots(4, 1, layout='constrained')
-    for i in range(0, 4):
+    fig, (ax0) = plt.subplots(n_systems, 1, layout='constrained') #TODO, ax1, ax2, ax3
+    for i in range(0, n_systems):
         # globals()["ax%s" % i] basically says "axi" for looped plotting
         globals()["ax%s" % i].plot(sim_time, states[:, (2*i):(2*i)+2])                  # Plot states
         globals()["ax%s" % i].plot(sim_time, outputs[:, (2*i)+1])                       # Plot output
+        globals()["ax%s" % i].scatter(sim_time, noisy_outputs[:, (2*i)+1], s=0.5, color="black")
         globals()["ax%s" % i].legend([f'$q_{i+1}$', f'$p_{i+1}$', f'$y_{i+1}$'], loc=1) # Add legends
         globals()["ax%s" % i].set_xlim([0, max(sim_time)])                              # Set xlimits
     plt.show()
     
+    # Export the dataset to torch file
+    PATH_DATA = "TEST_DATASET_GENERATED.pt"
+    torch.save(datasets, "datasets/" + PATH_DATA)
+    sys.print_arguments()
+    print(sys.J - sys.R + sys.C)

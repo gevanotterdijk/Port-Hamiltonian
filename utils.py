@@ -15,9 +15,9 @@ def RK4_multistep_integrator(deriv, dt, x, n_steps=1):
     return x
 
 
-def multisine_generator(t, freq_band, amplitude, n_states):
-    u = torch.zeros(len(t), n_states)
-    for state in range(n_states):
+def multisine_generator(t, freq_band, amplitude, n_inputs):
+    u = torch.zeros(len(t), n_inputs)
+    for state in range(n_inputs):
         for freq in freq_band:
             phase = 2*torch.pi*torch.rand(1)
             wave = torch.sin(freq*t + phase)
@@ -25,6 +25,18 @@ def multisine_generator(t, freq_band, amplitude, n_states):
     u = u*(amplitude/torch.max(u))
     return u
 
+
+def DK_matrix_form(vals):
+    dim = len(vals)
+    mat = torch.zeros(dim, dim)
+
+    for i in range(dim-1):
+        print(i)
+        mat[i, i] = vals[i]+vals[i+1]
+        mat[i, i+1] = mat[i+1, i] = -vals[i+1]
+        mat[i+1, i+1] = vals[i+1]
+    print(mat)
+    return mat
 
 ### Blockify functions ###
 def blockify_G(system_dim, theta):

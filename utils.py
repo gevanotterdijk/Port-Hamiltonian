@@ -31,11 +31,9 @@ def DK_matrix_form(vals):
     mat = torch.zeros(dim, dim)
 
     for i in range(dim-1):
-        print(i)
         mat[i, i] = vals[i]+vals[i+1]
         mat[i, i+1] = mat[i+1, i] = -vals[i+1]
         mat[i+1, i+1] = vals[i+1]
-    print(mat)
     return mat
 
 ### Blockify functions ###

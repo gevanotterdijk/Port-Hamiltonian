@@ -4,26 +4,31 @@ import matplotlib.pyplot as plt
 from utils import RK4_multistep_integrator, multisine_generator, DK_matrix_form
 
 from  deepSI_lite import Input_output_data
-
+plt.rcParams['figure.facecolor'] = "eee8e8"
+plt.rcParams['legend.framealpha'] = 0.9
+plt.rcParams['axes.grid'] = True
+plt.rcParams['grid.alpha'] = 0.25
 """
 Purpose: Generate input/output data for multiple connected mass spring dampers.
 """
 
 # Define system properties
 class coupled_MSD():
-    def __init__(self, M_vals, D_vals, K_vals, dt):
+    def __init__(self, M_vals, D_vals, K_vals, dt, cubic_damp=False):
         assert M_vals.shape[0] == D_vals.shape[0] == K_vals.shape[0] # Check that all the vectors have the same size
         self.dt = dt
         self.n_sys = M_vals.shape[0]
+        self.cubic_damp = cubic_damp
         self.M_mat = torch.diag(M_vals)
         self.D_mat = DK_matrix_form(D_vals)
         self.K_mat = DK_matrix_form(K_vals)
 
         # Setup the A matrix
-        self.A = torch.zeros([2*self.n_sys, 2*self.n_sys])
-        self.A[:self.n_sys, self.n_sys:] = torch.eye(self.n_sys)
-        self.A[self.n_sys:, :self.n_sys] = -torch.eye(self.n_sys)
-        self.A[self.n_sys:, self.n_sys:] = -self.D_mat
+        self.J = torch.zeros([2*self.n_sys, 2*self.n_sys])
+        self.J[:self.n_sys, self.n_sys:] = torch.eye(self.n_sys)
+        self.J[self.n_sys:, :self.n_sys] = -torch.eye(self.n_sys)
+        self.R = torch.zeros([2*self.n_sys, 2*self.n_sys])
+        self.R[self.n_sys:, self.n_sys:] = self.D_mat
         self.G = torch.cat((torch.zeros([self.n_sys, self.n_sys]), torch.eye(self.n_sys)), dim=0)
 
     def hamiltonian(self, x):
@@ -39,10 +44,17 @@ class coupled_MSD():
     def step(self, x, u):
         dHdx = self.hamiltonian(x)
         yhat = torch.einsum('ij, i -> j', self.G, dHdx) # Output according to G^T dHdx
-
+        
         def state_deriv(xnow):
             dHdx = self.hamiltonian(xnow)
-            deriv = torch.einsum("ij, j -> i", self.A, dHdx) + torch.einsum("ij, j -> i", self.G, u)
+            if self.cubic_damp: # Cubic damping term
+                qdot = torch.zeros_like(xnow)
+                qdot[self.n_sys:] = torch.einsum("ij, j -> i", torch.inverse(self.M_mat), xnow[self.n_sys:])
+                Rx = torch.einsum("ij, jk -> ik", self.R, torch.diag(qdot))
+                Rx2 = torch.einsum("ij, jk -> ik", torch.diag(qdot), Rx)
+                deriv = torch.einsum("ij, j -> i", self.J-Rx2, dHdx) + torch.einsum("ij, j -> i", self.G, u)
+            else:
+                deriv = torch.einsum("ij, j -> i", self.J-self.R, dHdx) + torch.einsum("ij, j -> i", self.G, u)
             return deriv
         
         x_next = RK4_multistep_integrator(deriv=state_deriv, dt=self.dt, x=x)
@@ -57,8 +69,10 @@ class coupled_MSD():
         print(self.D_mat)
         print(f"Spring matrix: {self.K_mat.shape}")
         print(self.K_mat)
-        print(f"Composite A matrix: {self.A.shape}")
-        print(self.A)
+        print(f"Composite J matrix: {self.J.shape}")
+        print(self.J)
+        print(f"Composite R matrix: {self.R.shape}")
+        print(self.R)
         print(f"Composite G matrix: {self.G.shape}")
         print(self.G)
 
@@ -78,16 +92,16 @@ def run_sim(sim_time, sys:coupled_MSD, x0:torch.FloatTensor, u_ext:torch.FloatTe
 
 if __name__ == "__main__":
     ### ======= SETTINGS ======== ###
-    sim_time = torch.linspace(0, 100, 1024)
+    sim_time = torch.linspace(0, 200, 1024)
     # Define an arbitrary system
     M_vals = torch.FloatTensor([2, 2, 2])
-    D_vals = torch.FloatTensor([1, 1, 1])
-    K_vals = torch.FloatTensor([0.5, 0.5, 0.5])
-    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1])
+    D_vals = torch.FloatTensor([0.5, 0.5, 0.5])
+    K_vals = torch.FloatTensor([1, 1, 1])
+    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=False)
 
-    # Dataset specifications
+    # Dataset specifications+
     noise = True
-    noise_sd = 0.025
+    noise_sd = 0.05
     n_datasets = 8
     x0 = torch.zeros(sys.n_sys*2)
     freq_band = torch.linspace(0.1, 7, 40)
@@ -121,6 +135,13 @@ if __name__ == "__main__":
         datasets.append(dataset_dict)
 
     # Plot the system behaviour
+    fig_input = plt.figure(figsize=(15, 3))
+    plt.plot(sim_time, inputs)
+    plt.legend([f"$u_{1}$", f"$u_{2}$", f"$u_{3}$"], loc=1)
+    plt.title("Generated input signal")
+    plt.xlim([0, max(sim_time)])         
+
+
     fig, (ax0, ax1, ax2) = plt.subplots(sys.n_sys, 1, layout='constrained') #TODO, automate ax1, ax2, ax3
     for i in range(0, sys.n_sys):
         # globals()["ax%s" % i] basically says "axi" for looped plotting
@@ -139,10 +160,10 @@ if __name__ == "__main__":
 
     # MATLAB EXPORTS:
     inputs = datasets[0]["inputs"].numpy()
-    np.savetxt("inputs.csv", inputs, delimiter=",")
+    np.savetxt("matlabIO/inputs.csv", inputs, delimiter=",")
     outputs = datasets[0]["output"].numpy()
-    np.savetxt("clean_outputs.csv", outputs, delimiter=",")
+    np.savetxt("matlabIO/clean_outputs.csv", outputs, delimiter=",")
     n_outputs = datasets[0]["noisy_output"].numpy()
-    np.savetxt("outputs.csv", n_outputs, delimiter=",")
+    np.savetxt("matlabIO/outputs.csv", n_outputs, delimiter=",")
 
     sys.print_arguments()

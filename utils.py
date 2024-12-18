@@ -51,6 +51,53 @@ def DK_matrix_form(vals):
     return mat
 
 
+def simulate_model(sim_time, model:Custom_SUBNET_CT, x0:torch.FloatTensor, u_ext:torch.FloatTensor):
+    s = torch.zeros(len(sim_time), x0.shape[0])     # Empty state tensor
+    y = torch.zeros(len(sim_time), u_ext.shape[1])  # Empty output tensor
+    x = x0
+        
+    for step, t_i in enumerate(sim_time):
+        s[step, :] = x.detach()
+
+        _, _, G, dHdx = model.get_matrices(x.view(1, -1))
+        y[step, :] = torch.einsum('bij, bi -> j', G, dHdx).detach()
+
+        def state_derivative(xnow):
+            J, R, G, dHdx = model.get_matrices(xnow.view(1, -1))
+            deriv = torch.einsum("bij, bj -> i", J-R, dHdx) + torch.einsum("bij, j -> i", G, u_ext[step, :])
+            return deriv
+        
+        x = RK4_multistep_integrator(deriv=state_derivative, dt=sim_time[1], x=x)
+    return s, y
+
+
+def plot_simulation(sim_time, true_outputs, sim_outputs, plot_mode="full_sim", title:str="Model simulation"):
+    if isinstance(plot_mode, int):
+        print(f"Plotting simulation results for state {plot_mode}")
+        plt.plot(sim_time, true_outputs[:, plot_mode], label=f"$y_{plot_mode}$")            # True system
+        plt.plot(sim_time, sim_outputs[:, plot_mode], label=f"$\\hat{{y}}_{plot_mode}$")    # Model simulation
+    elif isinstance(plot_mode, str):
+        assert plot_mode=="full_sim" or plot_mode=="error", "Invalid plot_mode argument, please use \"full_sim\" or \"error\"."
+        for state in range(true_outputs.shape[1]):
+            if plot_mode=="full_sim":
+                plt.plot(sim_time, true_outputs[:, state], label=f"$y_{state}$")            # True system
+                plt.plot(sim_time, sim_outputs[:, state], label=f"$\\hat{{y}}_{state}$")    # Model simulation
+            if plot_mode=="error":
+                plt.plot(sim_time, true_outputs[:, state], alpha=0.1, label='_nolegend_')                       # True system
+                plt.plot(sim_time, sim_outputs[:, state], alpha=0.1, label='_nolegend_')                        # Model simulation
+                plt.plot(sim_time, true_outputs[:, state]-sim_outputs[:, state], label=f"Error $y_{state}$")    # Error f'$q_{i+1}$'
+    else:
+        print("\033[91m \033[3m Invalid plot_mode specification: \033[0m Please provide the plot_mode argument with a valid specification. \n \
+               For plotting the whole system, either use \"full_sim\" or \"error\". \n \
+               For specific states, please provide the state number as an integer.")
+    # Plot settings
+    plt.xlim([0, sim_time[-1]])
+    plt.legend(loc=1)
+    plt.title(title)
+    plt.show()
+
+
+
 ### Blockify functions ###
 def blockify_J(system_dim, theta):
     batch_size = theta.shape[0]
@@ -136,7 +183,7 @@ def blockify_H(system_dim, theta):
 
 ### General NN structures ###
 class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
-    def __init__(self, n_in=6, n_out=5, n_nodes_per_layer=64, n_hidden_layers=2, activation=nn.Tanh):
+    def __init__(self, n_in=6, n_out=5, n_nodes_per_layer=64, n_hidden_layers=2, activation=nn.Tanh, initial_output_weight=False):
         super(feed_forward_nn,self).__init__()
         self.n_in = n_in
         self.n_out = n_out
@@ -153,6 +200,30 @@ class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
     def forward(self,X):
         return self.net(X)
 
+class simple_NN(nn.Module):
+    def __init__(self, n_in=6, n_out=5, n_nodes_per_layer=64, n_hidden_layers=2, activation=nn.Tanh, initial_output_is_zero=False):
+        super().__init__()
+        if n_hidden_layers == 0:    # Does a 0 layer nn make sense in this context?
+            self.net = nn.Linear(n_in, n_out) # Do we need an activation function after this?
+            if initial_output_is_zero:
+                self.net.weight = nn.Parameter(data=torch.zeros_like(self.net.weight))
+                self.net.bias = nn.Parameter(data=torch.zeros_like(self.net.bias))
+        else:
+            seq = [nn.Linear(n_in, n_nodes_per_layer), activation()]
+            for i in range(n_hidden_layers-1):
+                seq.append(nn.Linear(n_nodes_per_layer, n_nodes_per_layer))
+                seq.append(activation())
+            seq.append(nn.Linear(n_nodes_per_layer, n_out))
+            self.net = nn.Sequential(*seq)
+        
+            # For the initialisation with a linear estimate, the final output needs to be init at 0
+            if initial_output_is_zero:
+                with torch.no_grad():
+                    self.net[2*n_hidden_layers].weight = nn.Parameter(data=torch.zeros_like(self.net[2*n_hidden_layers].weight))
+                    self.net[2*n_hidden_layers].bias = nn.Parameter(data=torch.zeros_like(self.net[2*n_hidden_layers].bias))
+    
+    def forward(self, x):
+        return self.net(x)
 
 ### State-independent PHNN subnetworks ###
 class constant_J_net(nn.Module):
@@ -301,14 +372,14 @@ class var_G_net(nn.Module):
             
 
 class var_H_net(nn.Module):
-    def __init__(self, system_dim, net=feed_forward_nn):
+    def __init__(self, system_dim, net=feed_forward_nn, net_kwargs={}):
         super().__init__()
         self.system_dim = system_dim
         self.xc_dim = torch.sum(system_dim, 0)[0]
         self.net_list = nn.ModuleList()
 
         for sys, dim in enumerate(system_dim):
-            self.net_list.append(net(n_in=dim[0], n_out=dim[0]))
+            self.net_list.append(net(n_in=dim[0], n_out=dim[0], **net_kwargs))
     
     def forward(self, x):
         batch_size = x.shape[0]
@@ -436,4 +507,11 @@ if __name__ == "__main__":
     ysim = model.forward(upast, ypast, ufuture, sampling_time)
     
     cheat_model = cheat_PHNN(nu, ny, nx=nx, nb=nb, na=na, M=M, D=D, K=K)
-    cheat_fit = dsi.fit(cheat_model, train=dsi_train, val=dsi_val, n_its=1001, T=128, batch_size=64, val_freq=25)
+    #cheat_fit = dsi.fit(cheat_model, train=dsi_train, val=dsi_val, n_its=1001, T=128, batch_size=64, val_freq=25)
+    network = simple_NN(n_in=2, n_out=1, n_hidden_layers=2, n_nodes_per_layer=5, initial_output_weight_is_zero=True)
+    for param in network.parameters():
+        print(param)
+    
+    print("end")
+    print(network.net)
+    print(network.net[4].weight)

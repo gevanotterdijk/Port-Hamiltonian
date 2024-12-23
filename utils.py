@@ -58,13 +58,31 @@ def simulate_model(sim_time, model:Custom_SUBNET_CT, x0:torch.FloatTensor, u_ext
         
     for step, t_i in enumerate(sim_time):
         s[step, :] = x.detach()
-
         _, _, G, dHdx = model.get_matrices(x.view(1, -1))
         y[step, :] = torch.einsum('bij, bi -> j', G, dHdx).detach()
 
         def state_derivative(xnow):
             J, R, G, dHdx = model.get_matrices(xnow.view(1, -1))
             deriv = torch.einsum("bij, bj -> i", J-R, dHdx) + torch.einsum("bij, j -> i", G, u_ext[step, :])
+            return deriv
+        
+        x = RK4_multistep_integrator(deriv=state_derivative, dt=sim_time[1], x=x)
+    return s, y
+
+
+def simulate_model_withP(sim_time, model:Custom_SUBNET_CT, x0:torch.FloatTensor, u_ext:torch.FloatTensor):
+    s = torch.zeros(len(sim_time), x0.shape[0])     # Empty state tensor
+    y = torch.zeros(len(sim_time), u_ext.shape[1])  # Empty output tensor
+    x = x0
+        
+    for step, t_i in enumerate(sim_time):
+        s[step, :] = x.detach()
+        _, _, G, dHdx, P = model.get_matrices(x.view(1, -1))            # No need for the complex transposes, as we are only working with real J, R, G, Q, P, S, N estimates
+        y[step, :] = torch.einsum('bij, bi -> j', G+P, dHdx).detach()   # Transpose is included in the einsum
+
+        def state_derivative(xnow):
+            J, R, G, dHdx, P = model.get_matrices(xnow.view(1, -1))
+            deriv = torch.einsum("bij, bj -> i", J-R, dHdx) + torch.einsum("bij, j -> i", G-P, u_ext[step, :])
             return deriv
         
         x = RK4_multistep_integrator(deriv=state_derivative, dt=sim_time[1], x=x)
@@ -83,17 +101,19 @@ def plot_simulation(sim_time, true_outputs, sim_outputs, plot_mode="full_sim", t
                 plt.plot(sim_time, true_outputs[:, state], label=f"$y_{state}$")            # True system
                 plt.plot(sim_time, sim_outputs[:, state], label=f"$\\hat{{y}}_{state}$")    # Model simulation
             if plot_mode=="error":
-                plt.plot(sim_time, true_outputs[:, state], alpha=0.1, label='_nolegend_')                       # True system
-                plt.plot(sim_time, sim_outputs[:, state], alpha=0.1, label='_nolegend_')                        # Model simulation
+                plt.plot(sim_time, true_outputs[:, state],"k", alpha=0.1, label='_nolegend_')                       # True system
+                plt.plot(sim_time, sim_outputs[:, state],"k", alpha=0.1, label='_nolegend_')                        # Model simulation
                 plt.plot(sim_time, true_outputs[:, state]-sim_outputs[:, state], label=f"Error $y_{state}$")    # Error f'$q_{i+1}$'
     else:
         print("\033[91m \033[3m Invalid plot_mode specification: \033[0m Please provide the plot_mode argument with a valid specification. \n \
                For plotting the whole system, either use \"full_sim\" or \"error\". \n \
                For specific states, please provide the state number as an integer.")
     # Plot settings
+    plt.title(title)
+    plt.ylabel("Velocity ($ms^{-1}$)")
+    plt.xlabel("Time ($s$)")
     plt.xlim([0, sim_time[-1]])
     plt.legend(loc=1)
-    plt.title(title)
     plt.show()
 
 

@@ -100,7 +100,7 @@ if __name__ == "__main__":
     sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=True)
 
     # Dataset specifications+
-    noise = True
+    noise = "gaussian"
     noise_sd = 0.05
     n_datasets = 8
     x0 = torch.zeros(sys.n_sys*2)
@@ -127,9 +127,14 @@ if __name__ == "__main__":
             "dsi_IO":dsi_IO
         }
         # In case of noisy measurements, save both true and noisy measurements and take the noisy output for the dsi_IO 
-        if noise == True:
+        if noise == "gaussian":
             max_out = torch.max(output)
-            noisy_output = (noise_sd*max_out*torch.randn_like(output) - 0.5*noise_sd*max_out*torch.ones_like(output)) + output  # Note the gaussian noise
+            noisy_output = noise_sd*max_out*torch.randn_like(output) + output  # Note the gaussian noise
+            dataset_dict["dsi_IO"] = Input_output_data(u=inputs.numpy(), y=noisy_output.numpy(), sampling_time=(sim_time[1]-sim_time[0]))
+            dataset_dict["noisy_output"] = noisy_output            
+        elif noise == "uniform":
+            max_out = torch.max(output)
+            noisy_output = (noise_sd*max_out*torch.rand_like(output) - 0.5*noise_sd*max_out*torch.ones_like(output)) + output  # Note the uniform noise
             dataset_dict["dsi_IO"] = Input_output_data(u=inputs.numpy(), y=noisy_output.numpy(), sampling_time=(sim_time[1]-sim_time[0]))
             dataset_dict["noisy_output"] = noisy_output
         datasets.append(dataset_dict)

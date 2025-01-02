@@ -97,7 +97,7 @@ if __name__ == "__main__":
     M_vals = torch.FloatTensor([2, 2, 2])
     D_vals = torch.FloatTensor([0.5, 0.5, 0.5])
     K_vals = torch.FloatTensor([1, 1, 1])
-    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=False)
+    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=True)
 
     # Dataset specifications+
     noise = True
@@ -134,6 +134,7 @@ if __name__ == "__main__":
             dataset_dict["noisy_output"] = noisy_output
         datasets.append(dataset_dict)
 
+    ### ====== PLOTTING ======= ###
     # Plot the system behaviour
     fig_input = plt.figure(figsize=(15, 3))
     plt.plot(sim_time, inputs)
@@ -153,17 +154,18 @@ if __name__ == "__main__":
         globals()["ax%s" % i].legend([f'$q_{i+1}$', f'$p_{i+1}$', f'$y_{i+1}$'], loc=1)             # Add legends
         globals()["ax%s" % i].set_xlim([0, max(sim_time)])                                          # Set xlimits
     plt.show()
-    
+
+    ### ====== SAVING ======= ###
     # Export the dataset to torch file
     PATH_DATA = "TEST_DATASET_GENERATED.pt"
     torch.save(datasets, "datasets/" + PATH_DATA)
 
     # MATLAB EXPORTS:
     inputs = datasets[0]["inputs"].numpy()
-    np.savetxt("matlabIO/inputs.csv", inputs, delimiter=",")
+    np.savetxt("matlabIO/_inputs.csv", inputs, delimiter=",")
     outputs = datasets[0]["output"].numpy()
-    np.savetxt("matlabIO/clean_outputs.csv", outputs, delimiter=",")
+    np.savetxt("matlabIO/_outputs.csv", outputs, delimiter=",")
     n_outputs = datasets[0]["noisy_output"].numpy()
-    np.savetxt("matlabIO/outputs.csv", n_outputs, delimiter=",")
+    np.savetxt("matlabIO/_noisy_outputs.csv", n_outputs, delimiter=",")
 
     sys.print_arguments()

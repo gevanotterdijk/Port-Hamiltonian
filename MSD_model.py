@@ -21,7 +21,10 @@ class custom_PHNN(nn.Module):
     Custom PHNN setup, based off of the original deepSI implementation. Consists of 4 methods:
     """
     def __init__(self, system_dim, na, nb, dt,
-                 Jnet="nonlin", Rnet="nonlin", Gnet="nonlin", Hnet="nonlin"):
+                 Jnet="nonlin", Jnet_kwargs={},
+                 Rnet="nonlin", Rnet_kwargs={},
+                 Gnet="nonlin", Gnet_kwargs={},
+                 Hnet="nonlin", Hnet_kwargs={}):
         super().__init__()
         self.dt = dt
         self.na, self.nb = na, nb
@@ -30,10 +33,10 @@ class custom_PHNN(nn.Module):
         self.sigc_dim = torch.sum(system_dim, 0)[1]
 
         # Define the matrix NNs
-        self.Jnet = var_J_net(system_dim=system_dim) if Jnet=="nonlin" else Jnet
-        self.Rnet = var_R_net(system_dim=system_dim) if Rnet=="nonlin" else Rnet
-        self.Gnet = var_G_net(system_dim=system_dim) if Gnet=="nonlin" else Gnet
-        self.Hnet = var_H_net(system_dim=system_dim) if Hnet=="nonlin" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
+        self.Jnet = var_J_net(system_dim, **Jnet_kwargs) if Jnet=="nonlin" else Jnet
+        self.Rnet = var_R_net(system_dim, **Rnet_kwargs) if Rnet=="nonlin" else Rnet
+        self.Gnet = var_G_net(system_dim, **Gnet_kwargs) if Gnet=="nonlin" else Gnet
+        self.Hnet = var_H_net(system_dim, **Hnet_kwargs) if Hnet=="nonlin" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
 
         # Define the encoder NN
         self.enc_net = simple_res_net(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_hidden_layers=2)
@@ -66,8 +69,8 @@ class custom_PHNN(nn.Module):
         _, _, G, dHdx = self.get_matrices(x)
         yhat = torch.einsum("bij, bi -> bj", G, dHdx)
 
-        def state_deriv(xnow):
-            J, R, G, dHdx = self.get_matrices(xnow)
+        def state_deriv(x):
+            J, R, G, dHdx = self.get_matrices(x)
             deriv = torch.einsum("bij, bj -> bi", J - R, dHdx) + torch.einsum("bij, bj -> bi", G, u)    # Implicit ZOH, as the input is kept constant over the timestep.
             return deriv
         
@@ -113,8 +116,9 @@ class linear_PHNN(custom_PHNN):
 
 
 class cheat_PHNN(custom_PHNN):
-    def __init__(self, system_dim, na, nb, dt, M=None, D=None, K=None):
+    def __init__(self, system_dim, na, nb, dt, M=None, D=None, K=None, cubic=False):
         super().__init__(system_dim, na, nb, dt)
+        self.cubic = cubic
         self.M = torch.eye(int(self.xc_dim/2)) if M is None else M
         self.D = torch.eye(int(self.xc_dim/2)) if D is None else D
         self.K = torch.eye(int(self.xc_dim/2)) if K is None else K
@@ -131,7 +135,14 @@ class cheat_PHNN(custom_PHNN):
         R = torch.zeros(self.xc_dim, self.xc_dim)
         R[dim:, dim:] = self.D                          # WATCH OUT!!! R == D, so since we take -R, we also get -D
         R = R.expand(bs, self.xc_dim, self.xc_dim)      # Match batch sizes
-
+        if self.cubic:
+            qdot = torch.zeros(x.shape[0], self.xc_dim)
+            qdot[:, dim:] = torch.einsum("ij, bj -> bi", torch.inverse(self.M), x[:, dim:])
+            qdot = torch.diag_embed(qdot)               # Note the torch.diag_embed for batched diagonalisation!
+            Rx = torch.einsum("bij, bjk -> bik", R, qdot)
+            Rx2 = torch.einsum("bij, bjk -> bik", qdot, Rx)
+            R = Rx2
+        
         G = torch.cat((torch.zeros(self.sigc_dim, self.sigc_dim), torch.eye(self.sigc_dim)), dim=0) # Might run into issues here when sigc dim is not exactly half xc_dim
         G = G.expand(bs, self.xc_dim, self.sigc_dim)    # Match batch sizes
 
@@ -146,28 +157,46 @@ class cheat_PHNN(custom_PHNN):
 
 class combined_PHNN(custom_PHNN):
     def __init__(self, system_dim, na, nb, dt, x0, weight=1, 
-                 Jinit=None, Rinit=None, Ginit=None, Qinit=None,
-                 Jnet="nonlin", Rnet="nonlin", Gnet="nonlin", Hnet="nonlin"):
-        super().__init__(system_dim, na, nb, dt, Jnet, Rnet, Gnet, Hnet)
+                 Jinit=None, Jnet="nonlin",
+                 Rinit=None, Rnet="nonlin",
+                 Ginit=None, Gnet="nonlin",
+                 Pinit=None,
+                 Qinit=None, Hnet="nonlin", custom_kwargs={}):
+        super().__init__(system_dim, na, nb, dt, Jnet=Jnet, Rnet=Rnet, Gnet=Gnet, Hnet=Hnet, **custom_kwargs)
         self.x0 = x0 # TODO: TEMP SOLUTION!!!
         self.weight = weight #TODO: Potentially learn this scaling factor during training?
         # Takes the matrices from linear estimation as torch.FloatTensor([i, j])
         self.Jinit = torch.ones(self.xc_dim, self.xc_dim) if Jinit is None else Jinit
         self.Rinit = torch.ones(self.xc_dim, self.xc_dim) if Rinit is None else Rinit
         self.Ginit = torch.ones(self.xc_dim, self.sigc_dim) if Ginit is None else Ginit
+        self.Pinit = torch.ones(self.xc_dim, self.sigc_dim) if Pinit is None else Pinit
         self.Qinit = torch.ones(self.xc_dim, self.xc_dim) if Qinit is None else Qinit
 
     def get_matrices(self, x):
-        Jnn, Rnn, Gnn, dHdxnn  = super().get_matrices(x)  
-        J = self.Jinit.expand(x.shape[0], -1, -1) + self.weight*Jnn
-        R = self.Rinit.expand(x.shape[0], -1, -1) + self.weight*Rnn
-        G = self.Ginit.expand(x.shape[0], -1, -1) + self.weight*Gnn
+        #Jnn, Rnn, Gnn, dHdxnn  = super().get_matrices(x)  
+        
+        J = self.Jinit.expand(x.shape[0], -1, -1)# + self.weight*Jnn
+        R = self.Rinit.expand(x.shape[0], -1, -1)# + self.weight*Rnn
+        G = self.Ginit.expand(x.shape[0], -1, -1)# + self.weight*Gnn
+        P = self.Pinit.expand(x.shape[0], -1, -1)# + self.weight*Gnn
         dHdxinit = torch.einsum("ij, bj -> bi", self.Qinit, x)
-        dHdx = dHdxinit + self.weight*dHdxnn
-        return J, R, G, dHdx
+        dHdx = dHdxinit# + self.weight*dHdxnn
+        return J, R, G, dHdx, P
     
-    #def get_init_state(self, var1, var2): # TODO: FIX INITIALISATION!!!
-    #    return self.x0
+    #def get_init_state(self, var1, var2): # TODO: Find a linear encoder
+    #    return torch.zeros(var1.shape[0], self.x0.shape[1])
+
+    def step(self, x, u):
+        _, _, G, dHdx, P = self.get_matrices(x)
+        yhat = torch.einsum("bij, bi -> bj", G+P, dHdx)
+
+        def state_deriv(x):
+            J, R, G, dHdx, P = self.get_matrices(x)
+            deriv = torch.einsum("bij, bj -> bi", J - R, dHdx) + torch.einsum("bij, bj -> bi", G-P, u)    # Implicit ZOH, as the input is kept constant over the timestep.
+            return deriv
+        
+        xnext = RK4_multistep_integrator(state_deriv, dt=self.dt, x=x)
+        return xnext, yhat
 
 
 def fit_model(model: nn.Module, train_data:Input_output_data, val_data:torch.FloatTensor, n_its:int, T:int=50, stride:int=1, batch_size:int=256, val_freq:int=100):
@@ -246,26 +275,26 @@ if __name__ == "__main__":
                           Jinit=true_J[0, :, :], Rinit=true_R[0, :, :], Ginit=true_G[0, :, :], Qinit=true_Q)
 
     
-    # Test run
-    u1, y1, u2, y2 = past_future_arrays(data=datasets[1]["dsi_IO"], na=10, nb=10, T=nf, add_sampling_time=False, stride=1)[0]
-    ysim = model(u1, y1, u2)
-    plt.figure("Figure model before training")
-    plt.plot(y2[0, :, :].detach().numpy()) # y2 seems noisy? --> The dsi_IO is taking the noisy_outputs as its observations!
-    plt.plot(ysim[0, :, :].detach().numpy())
-    plt.legend(["$y_{1}$", "$y_{2}$", "$y_{3}$", "$\\hat{y}_{1}$", "$\\hat{y}_{2}$", "$\\hat{y}_{3}$"], loc=1)
+    ## Test run
+    #u1, y1, u2, y2 = past_future_arrays(data=datasets[1]["dsi_IO"], na=10, nb=10, T=nf, add_sampling_time=False, stride=1)[0]
+    #ysim = model(u1, y1, u2)
+    #plt.figure("Figure model before training")
+    #plt.plot(y2[0, :, :].detach().numpy()) # y2 seems noisy? --> The dsi_IO is taking the noisy_outputs as its observations!
+    #plt.plot(ysim[0, :, :].detach().numpy())
+    #plt.legend(["$y_{1}$", "$y_{2}$", "$y_{3}$", "$\\hat{y}_{1}$", "$\\hat{y}_{2}$", "$\\hat{y}_{3}$"], loc=1)
+    ##plt.show()
+#
+    ## Check N-step error
+    #plt.figure()
+    #plt.plot(sim_time, torch.zeros_like(sim_time), "k--")
+    #plt.plot(y2[0, :, :]-ysim[0, :, :].detach().numpy()) # Nstep error decreases asymptotically towards noise level, so system is sufficiently excited and mismatch through encoder decreases!
+#
+    ## Try training the custom function
+    #fit_model(model, datasets[0]["dsi_IO"], datasets[1]["dsi_IO"], n_its=100, T=25, batch_size=256, val_freq=5)
+    #ysim_trained = model(u1, y1, u2)
+    #plt.figure("Figure model after training")
+    #plt.plot(y2[0, :, :].detach().numpy()) # y2 seems noisy? --> The dsi_IO is taking the noisy_outputs as its observations!
+    #plt.plot(ysim[0, :, :].detach().numpy())
+    #plt.legend(["$y_{1}$", "$y_{2}$", "$y_{3}$", "$\\hat{y}_{1}$", "$\\hat{y}_{2}$", "$\\hat{y}_{3}$"], loc=1)
     #plt.show()
-
-    # Check N-step error
-    plt.figure()
-    plt.plot(sim_time, torch.zeros_like(sim_time), "k--")
-    plt.plot(y2[0, :, :]-ysim[0, :, :].detach().numpy()) # Nstep error decreases asymptotically towards noise level, so system is sufficiently excited and mismatch through encoder decreases!
-
-    # Try training the custom function
-    fit_model(model, datasets[0]["dsi_IO"], datasets[1]["dsi_IO"], n_its=100, T=25, batch_size=256, val_freq=5)
-    ysim_trained = model(u1, y1, u2)
-    plt.figure("Figure model after training")
-    plt.plot(y2[0, :, :].detach().numpy()) # y2 seems noisy? --> The dsi_IO is taking the noisy_outputs as its observations!
-    plt.plot(ysim[0, :, :].detach().numpy())
-    plt.legend(["$y_{1}$", "$y_{2}$", "$y_{3}$", "$\\hat{y}_{1}$", "$\\hat{y}_{2}$", "$\\hat{y}_{3}$"], loc=1)
-    plt.show()
     print("=========== END ===========")

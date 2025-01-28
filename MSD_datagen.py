@@ -89,15 +89,14 @@ def run_sim(sim_time, sys:coupled_MSD, x0:torch.FloatTensor, u_ext:torch.FloatTe
     return s, y
 
 
-
 if __name__ == "__main__":
     ### ======= SETTINGS ======== ###
     sim_time = torch.linspace(0, 200, 1024)
     # Define an arbitrary system
     M_vals = torch.FloatTensor([2, 2, 2])
-    D_vals = torch.FloatTensor([0.5, 0.5, 0.5])
-    K_vals = torch.FloatTensor([1, 1, 1])
-    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=True)
+    D_vals = torch.FloatTensor([1, 1, 1])
+    K_vals = torch.FloatTensor([0.5, 0.5, 0.5])
+    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=False)
 
     # Dataset specifications+
     noise = "gaussian"
@@ -114,7 +113,7 @@ if __name__ == "__main__":
     datasets = []
     for i in range(0, n_datasets):
         # Generate input signal
-        u = multisine_generator(sim_time, freq_band, amplitude=1, n_inputs=sys.n_sys)
+        u = multisine_generator(sim_time, freq_band, amplitude=10, n_inputs=sys.n_sys)
         inputs = torch.einsum("ij, j -> ij", u, input_mask)
         # Apply input and capture output
         states, output = run_sim(sim_time, sys, x0, inputs)

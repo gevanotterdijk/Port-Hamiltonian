@@ -173,14 +173,15 @@ class combined_PHNN(custom_PHNN):
         self.Qinit = torch.ones(self.xc_dim, self.xc_dim) if Qinit is None else Qinit
 
     def get_matrices(self, x):
-        #Jnn, Rnn, Gnn, dHdxnn  = super().get_matrices(x)  
+        # TODO: During encoder training it getting these matrices slows down the training while they are not necessary. Find a way to disable them during encoder training.
+        Jnn, Rnn, Gnn, dHdxnn  = super().get_matrices(x)  
         
-        J = self.Jinit.expand(x.shape[0], -1, -1)# + self.weight*Jnn
-        R = self.Rinit.expand(x.shape[0], -1, -1)# + self.weight*Rnn
-        G = self.Ginit.expand(x.shape[0], -1, -1)# + self.weight*Gnn
-        P = self.Pinit.expand(x.shape[0], -1, -1)# + self.weight*Gnn
+        J = self.Jinit.expand(x.shape[0], -1, -1) + self.weight*Jnn
+        R = self.Rinit.expand(x.shape[0], -1, -1) + self.weight*Rnn
+        G = self.Ginit.expand(x.shape[0], -1, -1) + self.weight*Gnn
+        P = self.Pinit.expand(x.shape[0], -1, -1) + self.weight*Gnn
         dHdxinit = torch.einsum("ij, bj -> bi", self.Qinit, x)
-        dHdx = dHdxinit# + self.weight*dHdxnn
+        dHdx = dHdxinit + self.weight*dHdxnn
         return J, R, G, dHdx, P
     
     #def get_init_state(self, var1, var2): # TODO: Find a linear encoder
@@ -242,7 +243,6 @@ def fit_model(model: nn.Module, train_data:Input_output_data, val_data:torch.Flo
                 print(f'Iteration {it:7,}, with training loss (NRMSE): {losses[it].detach().numpy():.5f} and validation loss (NRMSE): {val_losses[it]:.5f}')
     model.load_state_dict(best_model_sd) # Continue with the best state dict
     return losses, val_losses, best_model_sd
-
 
 
 if __name__ == "__main__":

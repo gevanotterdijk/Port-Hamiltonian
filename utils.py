@@ -219,6 +219,7 @@ class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
     def forward(self,X):
         return self.net(X)
 
+
 class simple_NN(nn.Module):
     def __init__(self, n_in=6, n_out=5, n_nodes_per_layer=64, n_hidden_layers=2, activation=nn.Tanh, initial_output_is_zero=False):
         super().__init__()
@@ -243,6 +244,7 @@ class simple_NN(nn.Module):
     
     def forward(self, x):
         return self.net(x)
+
 
 ### State-independent PHNN subnetworks ###
 class constant_J_net(nn.Module):

@@ -89,31 +89,32 @@ def run_sim(sim_time, sys:coupled_MSD, x0:torch.FloatTensor, u_ext:torch.FloatTe
     return s, y
 
 
-if __name__ == "__main__":
-    ### ======= SETTINGS ======== ###
-    sim_time = torch.linspace(0, 200, 1024)
-    # Define an arbitrary system
-    M_vals = torch.FloatTensor([2, 2, 2])
-    D_vals = torch.FloatTensor([1, 1, 1])
-    K_vals = torch.FloatTensor([0.5, 0.5, 0.5])
-    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=False)
-
-    # Dataset specifications+
-    noise = "gaussian"
-    noise_sd = 0.05
-    n_datasets = 8
-    x0 = torch.zeros(sys.n_sys*2)
-    freq_band = torch.linspace(0.1, 7, 40)
-    input_mask = torch.zeros(sys.n_sys)
+def generate_data(sim_time, M_vals, D_vals, K_vals,
+                  cubic_damp=True,
+                  noise="gaussian",
+                  noise_sd=0.05,
+                  n_datasets=8,
+                  freq_band=torch.linspace(0.1, 7, 40)):
+                  #TODO: Add intuitive x0 and input_mask selection arguments
+    """
+    Generates a list of dictionaries each containing a:
+    "inputs": input signals over sim_time --> [sim_time, nu]
+    "states": state signals over sim_time --> [sim_time, nx]
+    "output": output singals over sim_time --> [sim_time, nu]
+    "dsi_IO": A DeepSI Input_output_data object, for compatibility with that library
+    And, if noise is either "gaussian" or "uniform" they also contain:
+    "noisy_output": noisy output signals over sim_time --> [sim_time, nu]
+    """
+    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=cubic_damp)
+    x0 = torch.zeros(nsys*2)
+    input_mask = torch.zeros(nsys)
     input_mask[0] = 1   # Which masses to excite
-    
-    
-    ### ====== PROCESSING ======= ###
+
     # Generate the datasets
     datasets = []
     for i in range(0, n_datasets):
         # Generate input signal
-        u = multisine_generator(sim_time, freq_band, amplitude=10, n_inputs=sys.n_sys)
+        u = multisine_generator(sim_time, freq_band, amplitude=10, n_inputs=nsys)
         inputs = torch.einsum("ij, j -> ij", u, input_mask)
         # Apply input and capture output
         states, output = run_sim(sim_time, sys, x0, inputs)
@@ -138,7 +139,31 @@ if __name__ == "__main__":
             dataset_dict["noisy_output"] = noisy_output
         datasets.append(dataset_dict)
 
+    return datasets
+
+
+if __name__ == "__main__":
+    ### ======= SETTINGS ======== ###
+    sim_time = torch.linspace(0, 200, 1024)
+    # Define an arbitrary system
+    nx = 6
+    nsys = 3
+    M_vals = torch.FloatTensor([2, 2, 2])
+    D_vals = torch.FloatTensor([1, 1, 1])
+    K_vals = torch.FloatTensor([0.5, 0.5, 0.5])
+
+    datasets = generate_data(sim_time, M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_damp=True, n_datasets=1)
+
     ### ====== PLOTTING ======= ###
+    z = -1 # Select which dataset should be used for plotting
+    inputs = datasets[z]["inputs"]
+    states = datasets[z]["states"]
+    output = datasets[z]["output"]
+    if "noisy_output" in datasets[z]:   # Check if the dataset is generated with noise
+        noisy_output = datasets[z]["noisy_output"]
+    else:
+        print("No noisy output present in the dataset")
+
     # Plot the system behaviour
     fig_input = plt.figure(figsize=(15, 3))
     plt.plot(sim_time, inputs)
@@ -147,14 +172,15 @@ if __name__ == "__main__":
     plt.xlim([0, max(sim_time)])         
 
 
-    fig, (ax0, ax1, ax2) = plt.subplots(sys.n_sys, 1, layout='constrained') #TODO, automate ax1, ax2, ax3
-    for i in range(0, sys.n_sys):
+    fig, (ax0, ax1, ax2) = plt.subplots(nsys, 1, layout='constrained') #TODO, automate ax1, ax2, ax3
+    for i in range(0, nsys):
         # globals()["ax%s" % i] basically says "axi" for looped plotting
         globals()["ax%s" % i].plot(sim_time, torch.zeros_like(sim_time), "k--",label='_nolegend_')  # Plot 0-line
         globals()["ax%s" % i].plot(sim_time, states[:, i])                                          # Plot state q_i
-        globals()["ax%s" % i].plot(sim_time, states[:, sys.n_sys+i])                                # Plot state p_i
+        globals()["ax%s" % i].plot(sim_time, states[:, nsys+i])                                     # Plot state p_i
         globals()["ax%s" % i].plot(sim_time, output[:, i])                                          # Plot output y_i
-        globals()["ax%s" % i].scatter(sim_time, noisy_output[:, i], s=0.5, color="black")           # Plot noisy outputs y_1
+        if noisy_output is not None:
+            globals()["ax%s" % i].scatter(sim_time, noisy_output[:, i], s=0.5, color="black")       # Plot noisy outputs y_1
         globals()["ax%s" % i].legend([f'$q_{i+1}$', f'$p_{i+1}$', f'$y_{i+1}$'], loc=1)             # Add legends
         globals()["ax%s" % i].set_xlim([0, max(sim_time)])                                          # Set xlimits
     plt.show()
@@ -165,11 +191,12 @@ if __name__ == "__main__":
     torch.save(datasets, "datasets/" + PATH_DATA)
 
     # MATLAB EXPORTS:
-    inputs = datasets[0]["inputs"].numpy()
-    np.savetxt("matlabIO/_inputs.csv", inputs, delimiter=",")
-    outputs = datasets[0]["output"].numpy()
-    np.savetxt("matlabIO/_outputs.csv", outputs, delimiter=",")
-    n_outputs = datasets[0]["noisy_output"].numpy()
-    np.savetxt("matlabIO/_noisy_outputs.csv", n_outputs, delimiter=",")
+    #inputs = datasets[0]["inputs"].numpy()
+    #np.savetxt("matlabIO/_inputs.csv", inputs, delimiter=",")
+    #outputs = datasets[0]["output"].numpy()
+    #np.savetxt("matlabIO/_outputs.csv", outputs, delimiter=",")
+    #n_outputs = datasets[0]["noisy_output"].numpy()
+    #np.savetxt("matlabIO/_noisy_outputs.csv", n_outputs, delimiter=",")
 
+    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=True)
     sys.print_arguments()

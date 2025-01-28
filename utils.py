@@ -89,34 +89,6 @@ def simulate_model_withP(sim_time, model:Custom_SUBNET_CT, x0:torch.FloatTensor,
     return s, y
 
 
-def plot_simulation(sim_time, true_outputs, sim_outputs, plot_mode="full_sim", title:str="Model simulation"):
-    if isinstance(plot_mode, int):
-        print(f"Plotting simulation results for state {plot_mode}")
-        plt.plot(sim_time, true_outputs[:, plot_mode], label=f"$y_{plot_mode}$")            # True system
-        plt.plot(sim_time, sim_outputs[:, plot_mode], label=f"$\\hat{{y}}_{plot_mode}$")    # Model simulation
-    elif isinstance(plot_mode, str):
-        assert plot_mode=="full_sim" or plot_mode=="error", "Invalid plot_mode argument, please use \"full_sim\" or \"error\"."
-        for state in range(true_outputs.shape[1]):
-            if plot_mode=="full_sim":
-                plt.plot(sim_time, true_outputs[:, state], label=f"$y_{state}$")            # True system
-                plt.plot(sim_time, sim_outputs[:, state], label=f"$\\hat{{y}}_{state}$")    # Model simulation
-            if plot_mode=="error":
-                plt.plot(sim_time, true_outputs[:, state],"k", alpha=0.1, label='_nolegend_')                       # True system
-                plt.plot(sim_time, sim_outputs[:, state],"k", alpha=0.1, label='_nolegend_')                        # Model simulation
-                plt.plot(sim_time, true_outputs[:, state]-sim_outputs[:, state], label=f"Error $y_{state}$")    # Error f'$q_{i+1}$'
-    else:
-        print("\033[91m \033[3m Invalid plot_mode specification: \033[0m Please provide the plot_mode argument with a valid specification. \n \
-               For plotting the whole system, either use \"full_sim\" or \"error\". \n \
-               For specific states, please provide the state number as an integer.")
-    # Plot settings
-    plt.title(title)
-    plt.ylabel("Velocity ($ms^{-1}$)")
-    plt.xlabel("Time ($s$)")
-    plt.xlim([0, sim_time[-1]])
-    plt.legend(loc=1)
-    plt.show()
-
-
 ### Blockify functions ###
 def blockify_J(system_dim, theta):
     batch_size = theta.shape[0]
@@ -415,3 +387,43 @@ class var_H_net(nn.Module):
             H_vec[:, past_x_dim:past_x_dim+dim[0]] = vals
             past_x_dim += dim[0]
         return H_vec
+
+
+### Visualization functions
+def plot_simulation(sim_time, true_outputs, sim_outputs, plot_mode="full_sim", title:str="Model simulation"):
+    if isinstance(plot_mode, int):
+        print(f"Plotting simulation results for state {plot_mode}")
+        plt.plot(sim_time, true_outputs[:, plot_mode], label=f"$y_{plot_mode}$")            # True system
+        plt.plot(sim_time, sim_outputs[:, plot_mode], label=f"$\\hat{{y}}_{plot_mode}$")    # Model simulation
+    elif isinstance(plot_mode, str):
+        assert plot_mode=="full_sim" or plot_mode=="error", "Invalid plot_mode argument, please use \"full_sim\" or \"error\"."
+        for state in range(true_outputs.shape[1]):
+            if plot_mode=="full_sim":
+                plt.plot(sim_time, true_outputs[:, state], label=f"$y_{state}$")            # True system
+                plt.plot(sim_time, sim_outputs[:, state], label=f"$\\hat{{y}}_{state}$")    # Model simulation
+            if plot_mode=="error":
+                plt.plot(sim_time, true_outputs[:, state],"k", alpha=0.1, label='_nolegend_')                       # True system
+                plt.plot(sim_time, sim_outputs[:, state],"k", alpha=0.1, label='_nolegend_')                        # Model simulation
+                plt.plot(sim_time, true_outputs[:, state]-sim_outputs[:, state], label=f"Error $y_{state}$")    # Error f'$q_{i+1}$'
+    else:
+        print("\033[91m \033[3m Invalid plot_mode specification: \033[0m Please provide the plot_mode argument with a valid specification. \n \
+               For plotting the whole system, either use \"full_sim\" or \"error\". \n \
+               For specific states, please provide the state number as an integer.")
+    # Plot settings
+    plt.title(title)
+    plt.ylabel("Velocity ($ms^{-1}$)")
+    plt.xlabel("Time ($s$)")
+    plt.xlim([0, sim_time[-1]])
+    plt.legend(loc=1)
+    plt.show()
+
+
+def plot_matrix_heatmap(matrix, name=""):
+    fig, ax = plt.subplots()
+    im = ax.imshow(matrix, cmap='hot')
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            text = ax.text(j, i, round(matrix[i, j].item(), 2),
+                        ha="center", va="center", color="k")
+    plt.title("Heatmap of " + name)
+    plt.show()

@@ -51,6 +51,30 @@ def DK_matrix_form(vals):
     return mat
 
 
+def cubic_D_matrix_form(vals, x_tilde):
+    """
+    Assume that x is given as [q p]T, such that the x_tilde we need is q_dot.
+    So the input x_tilde = x[half:]/M
+    (Not sure)
+    """
+    dim = len(vals)
+    mat = torch.zeros(dim, dim)
+    
+    for i in range(dim):
+        try:
+            # The regular approach of determining R_ii, R_i(i+1) and R_(i+1)i
+            mat[i, i] = -vals[i]*(x_tilde[i]**2 - 3*x_tilde[i]*x_tilde[i-1] + 3*x_tilde[i-1]**2) + vals[i+1]*(-x_tilde[i]**2 + 3*x_tilde[i]*x_tilde[i+1] - 3*x_tilde[i+1]**2)  # General diagonal entry
+            mat[i+1, i] = vals[i+1]*x_tilde[i]**2   # General row below entry
+            mat[i, i+1] = vals[i+1]*x_tilde[i+1]**2 # General column to the right entry
+        except:
+            # This should only trigger when i == dim-1
+            mat[i, i] = -vals[i]*(x_tilde[i]**2 - 3*x_tilde[i]*x_tilde[i-1] + 3*x_tilde[i-1]**2)    # Exception for bottom right entry
+    
+    # Overwrite the top left entry with the appropriate exception
+    mat[0, 0] = vals[1]*(-x_tilde[0]**2 + 3*x_tilde[0]*x_tilde[1] - 3*x_tilde[1]**2) - vals[0]*x_tilde[0]**2    # Exception for top left entry
+    return mat
+
+
 def simulate_model(sim_time, model:Custom_SUBNET_CT, x0:torch.FloatTensor, u_ext:torch.FloatTensor):
     s = torch.zeros(len(sim_time), x0.shape[0])     # Empty state tensor
     y = torch.zeros(len(sim_time), u_ext.shape[1])  # Empty output tensor

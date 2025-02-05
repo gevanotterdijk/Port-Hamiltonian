@@ -420,10 +420,12 @@ def plot_simulation(sim_time, true_outputs, sim_outputs, plot_mode="full_sim", t
 
 def plot_matrix_heatmap(matrix, name=""):
     fig, ax = plt.subplots()
-    im = ax.imshow(matrix, cmap='hot')
-    for i in range(matrix.shape[0]):
-        for j in range(matrix.shape[1]):
-            text = ax.text(j, i, round(matrix[i, j].item(), 2),
+    im = ax.imshow(matrix, cmap='RdYlGn')
+    if torch.max(matrix) <= 1000:
+        for i in range(matrix.shape[0]):
+            for j in range(matrix.shape[1]):
+                ax.text(j, i, round(matrix[i, j].item(), 2),
                         ha="center", va="center", color="k")
     plt.title("Heatmap of " + name)
+    plt.colorbar(im)
     plt.show()

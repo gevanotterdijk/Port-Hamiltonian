@@ -51,27 +51,26 @@ def DK_matrix_form(vals):
     return mat
 
 
-def cubic_D_matrix_form(vals, x_tilde):
-    """
-    Assume that x is given as [q p]T, such that the x_tilde we need is q_dot.
-    So the input x_tilde = x[half:]/M
-    (Not sure)
-    """
-    dim = len(vals)
+def cubic_D_matrix_form(x, D_vals, M_mat = None):
+    dim = len(D_vals)
     mat = torch.zeros(dim, dim)
     
+    # Transform x in case x is not given as qdot
+    if M_mat is not None:
+        x_tilde = torch.matmul(torch.inverse(M_mat), x[dim:])
+        x = x_tilde
+
     for i in range(dim):
-        try:
-            # The regular approach of determining R_ii, R_i(i+1) and R_(i+1)i
-            mat[i, i] = -vals[i]*(x_tilde[i]**2 - 3*x_tilde[i]*x_tilde[i-1] + 3*x_tilde[i-1]**2) + vals[i+1]*(-x_tilde[i]**2 + 3*x_tilde[i]*x_tilde[i+1] - 3*x_tilde[i+1]**2)  # General diagonal entry
-            mat[i+1, i] = vals[i+1]*x_tilde[i]**2   # General row below entry
-            mat[i, i+1] = vals[i+1]*x_tilde[i+1]**2 # General column to the right entry
-        except:
-            # This should only trigger when i == dim-1
-            mat[i, i] = -vals[i]*(x_tilde[i]**2 - 3*x_tilde[i]*x_tilde[i-1] + 3*x_tilde[i-1]**2)    # Exception for bottom right entry
-    
-    # Overwrite the top left entry with the appropriate exception
-    mat[0, 0] = vals[1]*(-x_tilde[0]**2 + 3*x_tilde[0]*x_tilde[1] - 3*x_tilde[1]**2) - vals[0]*x_tilde[0]**2    # Exception for top left entry
+        if i == 0: # if i == 0, no left spring
+            mat[i, i] = -D_vals[i]*x[i]**2 - D_vals[i+1]*x[i]**2
+            mat[i, i+1] = D_vals[i+1]*(x[i+1]**2 - 3*x[i]*x[i+1] + 3*x[i]**2)
+        elif i == dim-1: # if i == dim-1, no right spring
+            mat[i, i-1] = D_vals[i]*x[i-1]**2
+            mat[i, i] = -D_vals[i]*(x[i]**2 - 3*x[i]*x[i-1] + 3*x[i-1]**2)
+        else:
+            mat[i, i-1] = D_vals[i]*x[i-1]**2
+            mat[i, i] = -D_vals[i]*(x[i]**2 - 3*x[i]*x[i-1] + 3*x[i-1]**2) - D_vals[i+1]*x[i]**2
+            mat[i, i+1] = D_vals[i+1]*(x[i+1]**2 - 3*x[i]*x[i+1] + 3*x[i]**2)
     return mat
 
 

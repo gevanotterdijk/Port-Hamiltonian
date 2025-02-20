@@ -217,7 +217,7 @@ class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
 
 
 class simple_NN(nn.Module):
-    def __init__(self, n_in=6, n_out=5, n_nodes_per_layer=64, n_hidden_layers=2, activation=nn.Tanh, initial_output_is_zero=False):
+    def __init__(self, n_in=6, n_out=5, n_hidden_layers=2, n_nodes_per_layer=64, activation=nn.Tanh, initial_output_is_zero=False):
         super().__init__()
         if n_hidden_layers == 0:    # Does a 0 layer nn make sense in this context?
             self.net = nn.Linear(n_in, n_out) # Do we need an activation function after this?
@@ -240,6 +240,37 @@ class simple_NN(nn.Module):
     
     def forward(self, x):
         return self.net(x)
+
+
+class simple_res_NN(nn.Module):
+    def __init__(self, n_in=6, n_out=5, n_hidden_layers=2, n_nodes_per_layer=64, activation=nn.Tanh, initial_output_is_zero=False):
+        super().__init__()
+        if n_hidden_layers == 0: # In case there are no hidden layers, the residual and normal FFW networks are simply a linear layer
+            self.net = nn.Linear(n_in, n_out)
+            if initial_output_is_zero:  # Potentially set the output to 0 for initialisation with an estimate
+                with torch.no_grad():
+                    self.net.weight = nn.Parameter(data=torch.zeros_like(self.net.weight))
+                    self.net.bias = nn.Parameter(data=torch.zeros_like(self.net.bias))
+        else: # Otherwise, we leave a linear connection between the input and output to act as a residual
+            self.res = nn.Linear(n_in, n_out)
+            seq = [nn.Linear(n_in, n_nodes_per_layer), activation()]
+            for i in range(n_hidden_layers-1):
+                seq.append(nn.Linear(n_nodes_per_layer, n_nodes_per_layer))
+                seq.append(activation())
+            seq.append(nn.Linear(n_nodes_per_layer, n_out))
+            self.net = nn.Sequential(*seq)
+            if initial_output_is_zero:  # Potentially set the output to 0 for initialisation with an estimate
+                with torch.no_grad():
+                    self.net[2*n_hidden_layers].weight = nn.Parameter(data=torch.zeros_like(self.net[2*n_hidden_layers].weight))
+                    self.net[2*n_hidden_layers].bias = nn.Parameter(data=torch.zeros_like(self.net[2*n_hidden_layers].bias))
+                    self.res.weight = nn.Parameter(data=torch.zeros_like(self.res.weight))
+                    self.res.bias = nn.Parameter(data=torch.zeros_like(self.res.bias))
+    
+    def forward(self, x):
+        try:
+            return self.net(x) + self.res(x)
+        except: # exception for the 0 hidden layer case
+            return self.net(x)
 
 
 ### State-independent PHNN subnetworks ###

@@ -1,9 +1,9 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from utils import RK4_multistep_integrator, multisine_generator, DK_matrix_form
+from utils import RK4_multistep_integrator, multisine_generator, DK_matrix_form, cubic_D_matrix_form
 
-from  deepSI_lite import Input_output_data
+from  deepSI import Input_output_data
 plt.rcParams['figure.facecolor'] = "eee8e8"
 plt.rcParams['legend.framealpha'] = 0.9
 plt.rcParams['axes.grid'] = True
@@ -14,14 +14,14 @@ Purpose: Generate input/output data for multiple connected mass spring dampers.
 
 # Define system properties
 class coupled_MSD():
-    def __init__(self, M_vals, D_vals, K_vals, dt, cubic_damp=False):
+    def __init__(self, M_vals, D_vals, K_vals, dt, cubic_D=None):
         assert M_vals.shape[0] == D_vals.shape[0] == K_vals.shape[0] # Check that all the vectors have the same size
         self.dt = dt
         self.n_sys = M_vals.shape[0]
-        self.cubic_damp = cubic_damp
         self.M_mat = torch.diag(M_vals)
         self.D_mat = DK_matrix_form(D_vals)
         self.K_mat = DK_matrix_form(K_vals)
+        self.cubic_D = torch.zeros_like(D_vals) if cubic_D is None else cubic_D
 
         # Setup the A matrix
         self.J = torch.zeros([2*self.n_sys, 2*self.n_sys])
@@ -47,12 +47,10 @@ class coupled_MSD():
         
         def state_deriv(xnow):
             dHdx = self.hamiltonian(xnow)
-            if self.cubic_damp: # Cubic damping term
-                qdot = torch.zeros_like(xnow)
-                qdot[self.n_sys:] = torch.einsum("ij, j -> i", torch.inverse(self.M_mat), xnow[self.n_sys:])
-                Rx = torch.einsum("ij, jk -> ik", self.R, torch.diag(qdot))
-                Rx2 = torch.einsum("ij, jk -> ik", torch.diag(qdot), Rx)
-                deriv = torch.einsum("ij, j -> i", self.J-Rx2, dHdx) + torch.einsum("ij, j -> i", self.G, u)
+            if self.cubic_D is not None: # Only run the cubic formation if there is actually cubic damping.
+                R_cubic = torch.zeros([2*self.n_sys, 2*self.n_sys])
+                R_cubic[self.n_sys:, self.n_sys:] = cubic_D_matrix_form(xnow, self.cubic_D, self.M_mat)   # Includes transformation from x = [q p] to x_tilde = qdot                
+                deriv = torch.einsum("ij, j -> i", self.J-self.R-R_cubic, dHdx) + torch.einsum("ij, j -> i", self.G, u)
             else:
                 deriv = torch.einsum("ij, j -> i", self.J-self.R, dHdx) + torch.einsum("ij, j -> i", self.G, u)
             return deriv
@@ -69,6 +67,9 @@ class coupled_MSD():
         print(self.D_mat)
         print(f"Spring matrix: {self.K_mat.shape}")
         print(self.K_mat)
+        if self.cubic_D is not None:
+            print(f"Cubic damping values: {self.cubic_D.shape}")
+            print(self.cubic_D)
         print(f"Composite J matrix: {self.J.shape}")
         print(self.J)
         print(f"Composite R matrix: {self.R.shape}")
@@ -90,7 +91,7 @@ def run_sim(sim_time, sys:coupled_MSD, x0:torch.FloatTensor, u_ext:torch.FloatTe
 
 
 def generate_data(sim_time, M_vals, D_vals, K_vals,
-                  cubic_damp=True,
+                  cubic_D=None,
                   noise="gaussian",
                   noise_sd=0.05,
                   n_datasets=8,
@@ -105,16 +106,16 @@ def generate_data(sim_time, M_vals, D_vals, K_vals,
     And, if noise is either "gaussian" or "uniform" they also contain:
     "noisy_output": noisy output signals over sim_time --> [sim_time, nu]
     """
-    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=cubic_damp)
-    x0 = torch.zeros(nsys*2)
-    input_mask = torch.zeros(nsys)
+    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_D=cubic_D)
+    x0 = torch.zeros(sys.n_sys*2)
+    input_mask = torch.zeros(sys.n_sys)
     input_mask[0] = 1   # Which masses to excite
 
     # Generate the datasets
     datasets = []
     for i in range(0, n_datasets):
         # Generate input signal
-        u = multisine_generator(sim_time, freq_band, amplitude=10, n_inputs=nsys)
+        u = multisine_generator(sim_time, freq_band, amplitude=15, n_inputs=sys.n_sys)
         inputs = torch.einsum("ij, j -> ij", u, input_mask)
         # Apply input and capture output
         states, output = run_sim(sim_time, sys, x0, inputs)
@@ -144,15 +145,16 @@ def generate_data(sim_time, M_vals, D_vals, K_vals,
 
 if __name__ == "__main__":
     ### ======= SETTINGS ======== ###
-    sim_time = torch.linspace(0, 200, 1024)
+    sim_time = torch.linspace(0, 100, 1024)
     # Define an arbitrary system
     nx = 6
     nsys = 3
     M_vals = torch.FloatTensor([2, 2, 2])
-    D_vals = torch.FloatTensor([1, 1, 1])
-    K_vals = torch.FloatTensor([0.5, 0.5, 0.5])
+    D_vals = torch.FloatTensor([3, 3, 3])
+    K_vals = torch.FloatTensor([4, 4, 4])
+    cD_vals = torch.FloatTensor([1, 1, 1])
 
-    datasets = generate_data(sim_time, M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_damp=True, n_datasets=1)
+    datasets = generate_data(sim_time, M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=cD_vals, n_datasets=1, freq_band=torch.linspace(0.1, 12, 40))
 
     ### ====== PLOTTING ======= ###
     z = -1 # Select which dataset should be used for plotting
@@ -198,5 +200,5 @@ if __name__ == "__main__":
     #n_outputs = datasets[0]["noisy_output"].numpy()
     #np.savetxt("matlabIO/_noisy_outputs.csv", n_outputs, delimiter=",")
 
-    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_damp=True)
+    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=cD_vals, dt=sim_time[1])
     sys.print_arguments()

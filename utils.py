@@ -3,9 +3,9 @@ import numpy as np
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-import deepSI_lite as dsi
-from deepSI_lite.models import Custom_SUBNET_CT
-from deepSI_lite.networks import MLP_res_net
+import deepSI as dsi
+from deepSI.models import Custom_SUBNET_CT
+from deepSI.networks import MLP_res_net
 
 
 ### General utility ###
@@ -211,6 +211,7 @@ class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
         for m in self.net.modules():
             if isinstance(m, nn.Linear):
                 nn.init.constant_(m.bias, val=0)
+                
     def forward(self,X):
         return self.net(X)
 
@@ -444,7 +445,7 @@ def plot_simulation(sim_time, true_outputs, sim_outputs, plot_mode="full_sim", t
 def plot_matrix_heatmap(matrix, name=""):
     fig, ax = plt.subplots()
     im = ax.imshow(matrix, cmap='RdYlGn')
-    if torch.max(matrix) <= 1000:
+    if torch.max(matrix) <= 100:
         for i in range(matrix.shape[0]):
             for j in range(matrix.shape[1]):
                 ax.text(j, i, round(matrix[i, j].item(), 2),

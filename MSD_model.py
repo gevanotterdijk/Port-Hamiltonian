@@ -6,9 +6,8 @@ from tqdm.auto import tqdm
 from copy import deepcopy
 
 from utils import *
-from deepSI_lite.models import past_future_arrays
-from deepSI_lite.fitting import data_batcher, compute_NMSE
-from deepSI.utils.torch_nets import simple_res_net
+from deepSI.models import past_future_arrays
+from deepSI.fitting import data_batcher, compute_NMSE
 from nonlinear_benchmarks import Input_output_data
 
 """
@@ -39,7 +38,7 @@ class custom_PHNN(nn.Module):
         self.Hnet = var_H_net(system_dim, **Hnet_kwargs) if Hnet=="nonlin" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
 
         # Define the encoder NN
-        self.enc_net = simple_res_net(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_hidden_layers=2)
+        self.enc_net = MLP_res_net(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_hidden_layers=2)
 
     def get_matrices(self, x):
         batch_size = x.shape[0]
@@ -104,7 +103,7 @@ class linear_PHNN(custom_PHNN):
         self.Hnet = constant_H_net(system_dim=system_dim) if Hnet=="con" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
 
         # Define the encoder NN (0 hidden layers --> linear)
-        self.enc_net = simple_res_net(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_hidden_layers=0)
+        self.enc_net = MLP_res_net(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_hidden_layers=0)
 
     def get_matrices(self, x):
         # Direct determination of dHdx

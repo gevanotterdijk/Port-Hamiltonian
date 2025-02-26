@@ -346,17 +346,16 @@ class var_J_net(nn.Module):
         past_x_dim = 0
         J_mat = torch.zeros(batch_size, self.xc_dim, self.xc_dim)
 
-        # TODO: Check speed difference between assigning parameters to J in a loop, or doing the J - J.permute(0, 2, 1)
         for sys, dim in enumerate(self.system_dim):
-            nJ = int((dim[0]**2 - dim[0]) / 2) # TODO: move nJ calc out of the for loop
+            nJ = int((dim[0]**2 - dim[0]) / 2)
             if nJ > 0:  # To avoid the single state system, where J has 0 elements
                 # Apply the subnetworks to find the parameters j_{ab}
                 c_theta = self.net_list[sys](x[:, past_x_dim:past_x_dim+dim[0]])
+                block = torch.zeros(batch_size, dim[0], dim[0])
 
-                for i in range(dim[0]):
-                    J_mat[:, past_x_dim+i, past_x_dim+1+i:past_x_dim+dim[0]] = c_theta[:, 0:dim[0]-(i+1)]
-                    J_mat[:, past_x_dim+1+i:past_x_dim+dim[0], past_x_dim+i] = -c_theta[:, 0:dim[0]-(i+1)]
-                    c_theta = c_theta[:, dim[0]-(i+1):]
+                indu = torch.triu_indices(row=dim[0], col=dim[0], offset=1) # offset=1 keeps the diagonal zeroes
+                block[:, indu[0], indu[1]] = c_theta
+                J_mat[:, past_x_dim:past_x_dim+dim[0], past_x_dim:past_x_dim+dim[0]] = block - torch.transpose(block, dim0=1, dim1=2)
             past_x_dim += dim[0]
         return J_mat
 

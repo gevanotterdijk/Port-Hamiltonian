@@ -120,17 +120,16 @@ def blockify_J(system_dim, theta):
 
     J_mat = torch.zeros(batch_size, xc_dim, xc_dim)
     for dim in system_dim:
-        # Select vals for system in question
+        # Specify subsystem dimensions
         nJ = int((dim[0]**2 - dim[0]) / 2)
-        c_theta = theta[:, past_vals:past_vals+nJ]
+        block = torch.zeros(batch_size, dim[0], dim[0])
 
-        # Assign values to correct locations
-        if nJ > 0: # Dodge the 1D case
-            for i in range(dim[0]):
-                J_mat[:, past_x_dim+i, past_x_dim+1+i:past_x_dim+dim[0]] = c_theta[:, 0:dim[0]-(i+1)]
-                J_mat[:, past_x_dim+1+i:past_x_dim+dim[0], past_x_dim+i] = -c_theta[:, 0:dim[0]-(i+1)]
-                c_theta = c_theta[:, dim[0]-(i+1):]
-
+        # Assign vals to correct location
+        if nJ > 0:  # Dodge the 1D case
+            indu = torch.triu_indices(row=dim[0], col=dim[0], offset=1) # offset=1 keeps the diagonal zeroes
+            block[:, indu[0], indu[1]] = theta[:, past_vals:past_vals+nJ]
+            J_mat[:, past_x_dim:past_x_dim+dim[0], past_x_dim:past_x_dim+dim[0]] = block - torch.transpose(block, dim0=1, dim1=2)
+        
         # Update counters
         past_x_dim += dim[0]
         past_vals += nJ

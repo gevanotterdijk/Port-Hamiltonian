@@ -196,17 +196,17 @@ def blockify_H(system_dim, theta):
 
 
 ### General NN structures ###
-class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
-    def __init__(self, n_in=6, n_out=5, n_nodes_per_layer=64, n_hidden_layers=2, activation=nn.Tanh, initial_output_weight=False):
+class feed_forward_nn(nn.Module): # deprecated MLP (Same as in deepSI)
+    def __init__(self, n_in=6, n_out=5, n_nodes=64, n_layers=2, activation=nn.Tanh, initial_output_weight=False):
         super(feed_forward_nn,self).__init__()
         self.n_in = n_in
         self.n_out = n_out
-        seq = [nn.Linear(n_in,n_nodes_per_layer), activation()]
-        assert n_hidden_layers>0, "feed_forward_nn should only be used for nonlinear neural nets"
-        for i in range(n_hidden_layers-1):
-            seq.append(nn.Linear(n_nodes_per_layer, n_nodes_per_layer))
+        seq = [nn.Linear(n_in,n_nodes), activation()]
+        assert n_layers>0, "feed_forward_nn should only be used for nonlinear neural nets"
+        for i in range(n_layers-1):
+            seq.append(nn.Linear(n_nodes, n_nodes))
             seq.append(activation())
-        seq.append(nn.Linear(n_nodes_per_layer, n_out))
+        seq.append(nn.Linear(n_nodes, n_out))
         self.net = nn.Sequential(*seq)
         for m in self.net.modules():
             if isinstance(m, nn.Linear):
@@ -217,35 +217,36 @@ class feed_forward_nn(nn.Module): # Standard MLP (Same as in deepSI)
 
 
 class simple_NN(nn.Module):
-    def __init__(self, n_in=6, n_out=5, n_hidden_layers=2, n_nodes_per_layer=64, activation=nn.Tanh, initial_output_is_zero=False):
+    def __init__(self, n_in=6, n_out=5, n_layers=2, n_nodes=64, activation=nn.Tanh, initial_output_is_zero=False):
         super().__init__()
-        if n_hidden_layers == 0:    # Does a 0 layer nn make sense in this context?
+        if n_layers == 0:    # Does a 0 layer nn make sense in this context?
             self.net = nn.Linear(n_in, n_out) # Do we need an activation function after this?
             if initial_output_is_zero:
-                self.net.weight = nn.Parameter(data=torch.zeros_like(self.net.weight))
-                self.net.bias = nn.Parameter(data=torch.zeros_like(self.net.bias))
+                with torch.no_grad():
+                    self.net.weight = nn.Parameter(data=torch.zeros_like(self.net.weight))
+                    self.net.bias = nn.Parameter(data=torch.zeros_like(self.net.bias))
         else:
-            seq = [nn.Linear(n_in, n_nodes_per_layer), activation()]
-            for i in range(n_hidden_layers-1):
-                seq.append(nn.Linear(n_nodes_per_layer, n_nodes_per_layer))
+            seq = [nn.Linear(n_in, n_nodes), activation()]
+            for i in range(n_layers-1):
+                seq.append(nn.Linear(n_nodes, n_nodes))
                 seq.append(activation())
-            seq.append(nn.Linear(n_nodes_per_layer, n_out))
+            seq.append(nn.Linear(n_nodes, n_out))
             self.net = nn.Sequential(*seq)
         
             # For the initialisation with a linear estimate, the final output needs to be init at 0
             if initial_output_is_zero:
                 with torch.no_grad():
-                    self.net[2*n_hidden_layers].weight = nn.Parameter(data=torch.zeros_like(self.net[2*n_hidden_layers].weight))
-                    self.net[2*n_hidden_layers].bias = nn.Parameter(data=torch.zeros_like(self.net[2*n_hidden_layers].bias))
+                    self.net[2*n_layers].weight = nn.Parameter(data=torch.zeros_like(self.net[2*n_layers].weight))
+                    self.net[2*n_layers].bias = nn.Parameter(data=torch.zeros_like(self.net[2*n_layers].bias))
     
     def forward(self, x):
         return self.net(x)
 
 
 class simple_res_NN(nn.Module):
-    def __init__(self, n_in=6, n_out=5, n_hidden_layers=2, n_nodes_per_layer=64, activation=nn.Tanh, initial_output_is_zero=False):
+    def __init__(self, n_in=6, n_out=5, n_layers=2, n_nodes=64, activation=nn.Tanh, initial_output_is_zero=False):
         super().__init__()
-        if n_hidden_layers == 0: # In case there are no hidden layers, the residual and normal FFW networks are simply a linear layer
+        if n_layers == 0: # In case there are no hidden layers, the residual and normal FFW networks are simply a linear layer
             self.net = nn.Linear(n_in, n_out)
             if initial_output_is_zero:  # Potentially set the output to 0 for initialisation with an estimate
                 with torch.no_grad():
@@ -253,16 +254,16 @@ class simple_res_NN(nn.Module):
                     self.net.bias = nn.Parameter(data=torch.zeros_like(self.net.bias))
         else: # Otherwise, we leave a linear connection between the input and output to act as a residual
             self.res = nn.Linear(n_in, n_out)
-            seq = [nn.Linear(n_in, n_nodes_per_layer), activation()]
-            for i in range(n_hidden_layers-1):
-                seq.append(nn.Linear(n_nodes_per_layer, n_nodes_per_layer))
+            seq = [nn.Linear(n_in, n_nodes), activation()]
+            for i in range(n_layers-1):
+                seq.append(nn.Linear(n_nodes, n_nodes))
                 seq.append(activation())
-            seq.append(nn.Linear(n_nodes_per_layer, n_out))
+            seq.append(nn.Linear(n_nodes, n_out))
             self.net = nn.Sequential(*seq)
             if initial_output_is_zero:  # Potentially set the output to 0 for initialisation with an estimate
                 with torch.no_grad():
-                    self.net[2*n_hidden_layers].weight = nn.Parameter(data=torch.zeros_like(self.net[2*n_hidden_layers].weight))
-                    self.net[2*n_hidden_layers].bias = nn.Parameter(data=torch.zeros_like(self.net[2*n_hidden_layers].bias))
+                    self.net[2*n_layers].weight = nn.Parameter(data=torch.zeros_like(self.net[2*n_layers].weight))
+                    self.net[2*n_layers].bias = nn.Parameter(data=torch.zeros_like(self.net[2*n_layers].bias))
                     self.res.weight = nn.Parameter(data=torch.zeros_like(self.res.weight))
                     self.res.bias = nn.Parameter(data=torch.zeros_like(self.res.bias))
     
@@ -329,7 +330,7 @@ class constant_H_net(nn.Module):
 
 ### Variable PHNN subnetworks ###
 class var_J_net(nn.Module):
-    def __init__(self, system_dim, net=feed_forward_nn, net_kwargs={}):
+    def __init__(self, system_dim, net=simple_res_NN, net_kwargs={}):
         super().__init__()
         self.system_dim = system_dim
         self.xc_dim = torch.sum(system_dim, 0)[0]
@@ -362,7 +363,7 @@ class var_J_net(nn.Module):
 
 
 class var_R_net(nn.Module):
-    def __init__(self, system_dim, net=feed_forward_nn, net_kwargs={}):
+    def __init__(self, system_dim, net=simple_res_NN, net_kwargs={}):
         super().__init__()
         self.system_dim = system_dim
         self.xc_dim = torch.sum(system_dim, 0)[0]
@@ -390,7 +391,7 @@ class var_R_net(nn.Module):
 
 
 class var_G_net(nn.Module):
-    def __init__(self, system_dim, net=feed_forward_nn, net_kwargs={}):
+    def __init__(self, system_dim, net=simple_res_NN, net_kwargs={}):
         super().__init__()
         self.system_dim = system_dim
         self.xc_dim = torch.sum(system_dim, 0)[0]
@@ -420,7 +421,7 @@ class var_G_net(nn.Module):
             
 
 class var_H_net(nn.Module):
-    def __init__(self, system_dim, net=feed_forward_nn, net_kwargs={}):
+    def __init__(self, system_dim, net=simple_res_NN, net_kwargs={}):
         super().__init__()
         self.system_dim = system_dim
         self.xc_dim = torch.sum(system_dim, 0)[0]

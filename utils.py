@@ -112,6 +112,59 @@ def simulate_model_withP(sim_time, model:Custom_SUBNET_CT, x0:torch.FloatTensor,
     return s, y
 
 
+def timeseries_splitting(data:dict|list, n_past:int, n_future:int, stride:int=1):
+    """
+    Function taking a dictionary or list of dictionaries containing input and output signals.
+    Returns 4 tensors each containing [n_windows, time_steps, n_states], for the past inputs, past outputs, future inputs and future outputs.
+    """
+    # Exception handling for list of dicts instead of singular dict (i.e. multiple datasets)
+    if isinstance(data, list):
+        print(f"{len(data)} datasets detected")
+        u_past_full = y_past_full = u_future_full = y_future_full = torch.FloatTensor()
+        for set in data:
+            u_past_set, y_past_set, u_future_set, y_future_set =  timeseries_splitting(set, n_past, n_future, stride)
+            u_past_full = torch.concat((u_past_full, u_past_set), dim=0)
+            y_past_full = torch.concat((y_past_full, y_past_set), dim=0)
+            u_future_full = torch.concat((u_future_full, u_future_set), dim=0)
+            y_future_full = torch.concat((y_future_full, y_future_set), dim=0)
+        return u_past_full, y_past_full, u_future_full, y_future_full
+
+    assert "inputs" in data.keys()  # Dictionary should contain a set of inputs
+    assert "output" in data.keys()  # Dictionary should contain a set of outputs
+    assert data["inputs"].shape[0] == data["output"].shape[0] # Input and output should be of same length
+
+    # An output timeseries should be of length: (n_samples-n_past-n_future)/2 + 1
+    # How many timeseries should there be?
+    n_samples = data["inputs"].shape[0]
+    n_windows = int((n_samples-n_past-n_future)/stride + 1)
+    
+    # We want the tensors in dimension: [n_windows, time_steps, n_states]
+    u = data["inputs"]
+    u_dim = u.shape[1]
+    u_past = torch.as_strided(u[:-n_future, :], size=(n_windows, n_past, u_dim), stride=(stride*u_dim, u_dim, 1))
+    u_future = torch.as_strided(u[n_past:, :], size=(n_windows, n_future, u_dim), stride=(stride*u_dim, u_dim, 1))
+
+    y = data["output"]
+    y_dim = y.shape[1]
+    y_past = torch.as_strided(y[:-n_future, :], size=(n_windows, n_past, y_dim), stride=(stride*y_dim, y_dim, 1))
+    y_future = torch.as_strided(y[n_past:, :], size=(n_windows, n_future, y_dim), stride=(stride*y_dim, y_dim, 1))
+    return u_past, y_past, u_future, y_future
+
+
+def custom_data_batcher(*arrays, batch_size):
+    n_windows = arrays[0].shape[0]
+    assert batch_size <= n_windows, "Batch size can not be larger than dataset size"
+    
+    while True:
+        # Shuffle the dataset in the n_windows dimension (Since all arrays have the same n_windows, we only need to
+        shuffled_index = torch.randperm(arrays[0].shape[0])
+        start, end = 0, batch_size
+        while end <= n_windows:
+            batch_array = tuple(array.index_select(0, shuffled_index)[start:end, :, :] for array in arrays)
+            yield batch_array
+            start, end = start+batch_size, end+batch_size
+
+
 ### Blockify functions ###
 def blockify_J(system_dim, theta):
     batch_size = theta.shape[0]

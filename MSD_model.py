@@ -38,7 +38,7 @@ class custom_PHNN(nn.Module):
         self.Hnet = var_H_net(system_dim, **Hnet_kwargs) if Hnet=="nonlin" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
 
         # Define the encoder NN
-        self.enc_net = MLP_res_net(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_hidden_layers=2)
+        self.enc_net = simple_res_NN(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_layers=2)
 
     def get_matrices(self, x):
         batch_size = x.shape[0]
@@ -103,7 +103,7 @@ class linear_PHNN(custom_PHNN):
         self.Hnet = constant_H_net(system_dim=system_dim) if Hnet=="con" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
 
         # Define the encoder NN (0 hidden layers --> linear)
-        self.enc_net = MLP_res_net(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_hidden_layers=0)
+        self.enc_net = simple_res_NN(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_hidden_layers=0)
 
     def get_matrices(self, x):
         # Direct determination of dHdx
@@ -155,14 +155,13 @@ class cheat_PHNN(custom_PHNN):
 
 
 class combined_PHNN(custom_PHNN):
-    def __init__(self, system_dim, na, nb, dt, x0, weight=1, 
+    def __init__(self, system_dim, na, nb, dt, weight=1, 
                  Jinit=None, Jnet="nonlin",
                  Rinit=None, Rnet="nonlin",
                  Ginit=None, Gnet="nonlin",
                  Pinit=None,
                  Qinit=None, Hnet="nonlin", custom_kwargs={}):
         super().__init__(system_dim, na, nb, dt, Jnet=Jnet, Rnet=Rnet, Gnet=Gnet, Hnet=Hnet, **custom_kwargs)
-        self.x0 = x0 # TODO: TEMP SOLUTION!!!
         self.weight = weight #TODO: Potentially learn this scaling factor during training?
         # Takes the matrices from linear estimation as torch.FloatTensor([i, j])
         self.Jinit = torch.ones(self.xc_dim, self.xc_dim) if Jinit is None else Jinit
@@ -173,7 +172,7 @@ class combined_PHNN(custom_PHNN):
 
     def get_matrices(self, x):
         # TODO: During encoder training it getting these matrices slows down the training while they are not necessary. Find a way to disable them during encoder training.
-        Jnn, Rnn, Gnn, dHdxnn  = super().get_matrices(x)  
+        Jnn, Rnn, Gnn, dHdxnn = super().get_matrices(x)  
         
         J = self.Jinit.expand(x.shape[0], -1, -1) + self.weight*Jnn
         R = self.Rinit.expand(x.shape[0], -1, -1) + self.weight*Rnn
@@ -183,9 +182,6 @@ class combined_PHNN(custom_PHNN):
         dHdx = dHdxinit + self.weight*dHdxnn
         return J, R, G, dHdx, P
     
-    #def get_init_state(self, var1, var2): # TODO: Find a linear encoder
-    #    return torch.zeros(var1.shape[0], self.x0.shape[1])
-
     def step(self, x, u):
         _, _, G, dHdx, P = self.get_matrices(x)
         yhat = torch.einsum("bij, bi -> bj", G+P, dHdx)
@@ -199,49 +195,61 @@ class combined_PHNN(custom_PHNN):
         return xnext, yhat
 
 
-def fit_model(model: nn.Module, train_data:Input_output_data, val_data:torch.FloatTensor, n_its:int, T:int=50, stride:int=1, batch_size:int=256, val_freq:int=100):
-    # understand this derivation of the fit_minimal_implementation from deepSI_lite.fitting
-    loss_fn = nn.MSELoss() # init loss function
+def fit_model(model:nn.Module, train_data:dict|list, val_data:dict|list, n_its:int, n_future:int=50, stride:int=1, batch_size:int=64, val_freq:int=100, lr:float=1e-3, enc_train=False):
+    loss_fn = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    
+    # Transform the datasets into batches of (u_past, y_past, u_future, y_future)
+    arrays = timeseries_splitting(data=train_data, n_past=model.na, n_future=n_future, stride=stride)
+    if enc_train:   # Validation length equal to the training data
+        arrays_val = timeseries_splitting(data=val_data, n_past=model.na, n_future=n_future, stride=stride)
+    else:   # # Validation length set to max (while keeping 1 batch of data)
+        if isinstance(val_data, dict):
+            n_samples = val_data["inputs"].shape[0]
+        elif isinstance(val_data, list):    # Work with the shortest dataset in the list
+            n_samples = n_future
+            for set in val_data:
+                set_samples = set["inputs"].shape[0]
+                if set_samples > n_samples:
+                    n_samples = set_samples
+        max_future = n_samples-model.na-batch_size+1    # Reduce by batch_size to keep atleast 1 full batch of validation data (Could throw errors for very small datasets!)
+        arrays_val = timeseries_splitting(data=val_data, n_past=model.na, n_future=max_future, stride=1)
+    itter = custom_data_batcher(*arrays, batch_size=batch_size)    # Take a random slice of the data [batch_size x (upast, ypast, ufut, yfut)] per iteration
+    
+    # Initialize storage
+    best_val, best_model_sd = float('inf'), model.state_dict()
+    losses = losses_val = torch.zeros(n_its)
 
-    optimizer = torch.optim.Adam(model.parameters()) # init optimizer
-
-    arrays, indices = past_future_arrays(train_data, na=model.na, nb=model.nb, T=T, add_sampling_time=False, stride=stride) #transform (u, y) into (u1, y1, u2, y2)
-    arrays_val, indices_val = past_future_arrays(val_data, na=model.na, nb=model.nb, T=T, add_sampling_time=False, stride=stride) #transform (u, y) into (u1, y1, u2, y2)
-    arrays = [a[indices_val] for a in arrays_val] # seems to be the same as the original arrays_val
-    itter = data_batcher(*arrays, batch_size=batch_size, indices=indices) # We take a random slice of the data [batch_size x (upast, ypast, ufut, yfut)] per iteration
-
-    best_val, best_model_sd = float('inf'), model.state_dict() # initialize storage
-    losses = torch.zeros(n_its)
-    val_losses = torch.zeros(n_its)
-
+    # Training procedure
     for it, batch in zip(tqdm(range(n_its)), itter):
+        # Training step
         optimizer.zero_grad()
-
-        ysim = model(batch[0], batch[1], batch[2])
+        
+        ysim = model(batch[0], batch[1], batch[2])  # runs model.forward(u_past, y_past, u_future)
         loss = loss_fn(ysim, batch[3])
         loss_norm_factor = torch.max(torch.abs(batch[3])) - torch.min(torch.abs(batch[3])) #Normalization
         losses[it] = loss.detach().numpy() / loss_norm_factor
-
-        with torch.no_grad():
-            ysim_val = model(arrays_val[0], arrays_val[1], arrays_val[2])
-            val_loss = loss_fn(ysim_val, arrays_val[3])
-            val_loss_norm_factor = torch.max(torch.abs(arrays_val[3])) - torch.min(torch.abs(arrays_val[3]))  #Normalization
-            val_losses[it] = val_loss / val_loss_norm_factor
-            # Save the best model
-            if val_losses[it] < best_val:
-                best_val = val_losses[it]
-                best_model_sd = model.state_dict()
-
+        
         loss.backward()
         optimizer.step()
 
-        if it % val_freq == 0:  # Validation step
-            if val_losses[it] == best_val:
-                print(f'Iteration {it:7,}, with training loss (NRMSE): {losses[it].detach().numpy():.5f} and validation loss (NRMSE): {val_losses[it]:.5f} === NEW BEST VALIDATION!')
+        # Validation step
+        if it % val_freq == 0:
+            with torch.no_grad():
+                ysim_val = model(arrays_val[0], arrays_val[1], arrays_val[2])
+                loss_val = loss_fn(ysim_val, arrays_val[3])
+                loss_val_norm_factor = torch.max(torch.abs(arrays_val[3])) - torch.min(torch.abs(arrays_val[3]))  #Normalization
+                losses_val[it] = loss_val / loss_val_norm_factor
+                # Save the best model
+                if losses_val[it] < best_val:
+                    best_val = losses_val[it]
+                    best_model_sd = model.state_dict()
+            if losses_val[it] == best_val:
+                print(f'Iteration {it:7,}, with training loss (NRMSE): {losses[it].detach().numpy():.5f} and validation loss (NRMSE): {losses_val[it]:.5f} === NEW BEST VALIDATION!')
             else:
-                print(f'Iteration {it:7,}, with training loss (NRMSE): {losses[it].detach().numpy():.5f} and validation loss (NRMSE): {val_losses[it]:.5f}')
+                print(f'Iteration {it:7,}, with training loss (NRMSE): {losses[it].detach().numpy():.5f} and validation loss (NRMSE): {losses_val[it]:.5f}')
     model.load_state_dict(best_model_sd) # Continue with the best state dict
-    return losses, val_losses, best_model_sd
+    return losses, losses_val, best_model_sd
 
 
 if __name__ == "__main__":

@@ -218,7 +218,8 @@ def fit_model(model:nn.Module, train_data:dict|list, val_data:dict|list, n_its:i
     
     # Initialize storage
     best_val, best_model_sd = float('inf'), model.state_dict()
-    losses = losses_val = torch.zeros(n_its)
+    losses = torch.zeros(n_its)
+    losses_val = torch.zeros(n_its)
 
     # Training procedure
     for it, batch in zip(tqdm(range(n_its)), itter):

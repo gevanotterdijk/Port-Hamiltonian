@@ -47,7 +47,7 @@ class coupled_MSD():
         
         def state_deriv(xnow):
             dHdx = self.hamiltonian(xnow)
-            if self.cubic_D is not None: # Only run the cubic formation if there is actually cubic damping.
+            if self.cubic_D is not None: # Only run the cubic formation if there actually is cubic damping.
                 R_cubic = torch.zeros([2*self.n_sys, 2*self.n_sys])
                 R_cubic[self.n_sys:, self.n_sys:] = cubic_D_matrix_form(xnow, self.cubic_D, self.M_mat)   # Includes transformation from x = [q p] to x_tilde = qdot                
                 deriv = torch.einsum("ij, j -> i", self.J-self.R-R_cubic, dHdx) + torch.einsum("ij, j -> i", self.G, u)
@@ -93,7 +93,7 @@ def run_sim(sim_time, sys:coupled_MSD, x0:torch.FloatTensor, u_ext:torch.FloatTe
 def generate_data(sim_time, M_vals, D_vals, K_vals,
                   cubic_D=None,
                   noise="gaussian",
-                  noise_sd=0.05,
+                  SNR=10,
                   n_datasets=8,
                   freq_band=torch.linspace(0.1, 7, 40)):
                   #TODO: Add intuitive x0 and input_mask selection arguments
@@ -107,7 +107,7 @@ def generate_data(sim_time, M_vals, D_vals, K_vals,
     "noisy_output": noisy output signals over sim_time --> [sim_time, nu]
     """
     sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_D=cubic_D)
-    x0 = torch.zeros(sys.n_sys*2)
+    x0 = torch.rand(sys.n_sys*2)-0.5*torch.ones(sys.n_sys*2)   # initial states between [-0.5, 0.5] 
     input_mask = torch.zeros(sys.n_sys)
     input_mask[0] = 1   # Which masses to excite
 
@@ -115,7 +115,7 @@ def generate_data(sim_time, M_vals, D_vals, K_vals,
     datasets = []
     for i in range(0, n_datasets):
         # Generate input signal
-        u = multisine_generator(sim_time, freq_band, amplitude=15, n_inputs=sys.n_sys)
+        u = multisine_generator(sim_time, freq_band, amplitude=10, n_inputs=sys.n_sys)
         inputs = torch.einsum("ij, j -> ij", u, input_mask)
         # Apply input and capture output
         states, output = run_sim(sim_time, sys, x0, inputs)
@@ -129,13 +129,15 @@ def generate_data(sim_time, M_vals, D_vals, K_vals,
         }
         # In case of noisy measurements, save both true and noisy measurements and take the noisy output for the dsi_IO 
         if noise == "gaussian":
-            max_out = torch.max(output)
-            noisy_output = noise_sd*max_out*torch.randn_like(output) + output  # Note the gaussian noise
+            max_out, _ = torch.max(torch.abs(output), dim=0)
+            noise_level  = torch.diag(max_out - torch.mean(torch.abs(output), dim=0)) / SNR # Different noise levels to respect the SNR for each state
+            noisy_output = output + torch.matmul(torch.randn_like(output), noise_level)
             dataset_dict["dsi_IO"] = Input_output_data(u=inputs.numpy(), y=noisy_output.numpy(), sampling_time=(sim_time[1]-sim_time[0]))
             dataset_dict["noisy_output"] = noisy_output            
         elif noise == "uniform":
-            max_out = torch.max(output)
-            noisy_output = (noise_sd*max_out*torch.rand_like(output) - 0.5*noise_sd*max_out*torch.ones_like(output)) + output  # Note the uniform noise
+            max_out, _ = torch.max(torch.abs(output), dim=0)
+            noise_level  = torch.diag(max_out - torch.mean(torch.abs(output), dim=0)) / SNR # Different noise levels to respect the SNR for each state
+            noisy_output = output + torch.matmul(torch.rand_like(output), noise_level) - 0.5*torch.matmul(torch.ones_like(output), noise_level)
             dataset_dict["dsi_IO"] = Input_output_data(u=inputs.numpy(), y=noisy_output.numpy(), sampling_time=(sim_time[1]-sim_time[0]))
             dataset_dict["noisy_output"] = noisy_output
         datasets.append(dataset_dict)
@@ -145,7 +147,7 @@ def generate_data(sim_time, M_vals, D_vals, K_vals,
 
 if __name__ == "__main__":
     ### ======= SETTINGS ======== ###
-    sim_time = torch.linspace(0, 100, 1024)
+    sim_time = torch.linspace(0, 100, 1000)
     # Define an arbitrary system
     nx = 6
     nsys = 3
@@ -154,7 +156,7 @@ if __name__ == "__main__":
     K_vals = torch.FloatTensor([4, 4, 4])
     cD_vals = torch.FloatTensor([1, 1, 1])
 
-    datasets = generate_data(sim_time, M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=cD_vals, n_datasets=1, freq_band=torch.linspace(0.1, 12, 40))
+    datasets = generate_data(sim_time, M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=cD_vals, n_datasets=8, noise="gaussian", SNR=10, freq_band=torch.linspace(1/sim_time[-1], 150/sim_time[-1], 40))
 
     ### ====== PLOTTING ======= ###
     z = -1 # Select which dataset should be used for plotting
@@ -200,5 +202,5 @@ if __name__ == "__main__":
     #n_outputs = datasets[0]["noisy_output"].numpy()
     #np.savetxt("matlabIO/_noisy_outputs.csv", n_outputs, delimiter=",")
 
-    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=cD_vals, dt=sim_time[1])
+    sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=None, dt=sim_time[1])
     sys.print_arguments()

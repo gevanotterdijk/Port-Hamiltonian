@@ -93,7 +93,7 @@ def run_sim(sim_time, sys:coupled_MSD, x0:torch.FloatTensor, u_ext:torch.FloatTe
 def generate_data(sim_time, M_vals, D_vals, K_vals,
                   cubic_D=None,
                   noise="gaussian",
-                  SNR=10,
+                  SNR=10,   # NOTE THAT THIS IS IN RATIO INSTEAD OF dB!
                   n_datasets=8,
                   freq_band=torch.linspace(0.1, 7, 40)):
                   #TODO: Add intuitive x0 and input_mask selection arguments
@@ -107,7 +107,7 @@ def generate_data(sim_time, M_vals, D_vals, K_vals,
     "noisy_output": noisy output signals over sim_time --> [sim_time, nu]
     """
     sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, dt=sim_time[1], cubic_D=cubic_D)
-    x0 = torch.rand(sys.n_sys*2)-0.5*torch.ones(sys.n_sys*2)   # initial states between [-0.5, 0.5] 
+    x0 = torch.zeros(sys.n_sys*2)#torch.rand(sys.n_sys*2)-0.5*torch.ones(sys.n_sys*2)   # initial states between [-0.5, 0.5] 
     input_mask = torch.zeros(sys.n_sys)
     input_mask[0] = 1   # Which masses to excite
 
@@ -129,9 +129,8 @@ def generate_data(sim_time, M_vals, D_vals, K_vals,
         }
         # In case of noisy measurements, save both true and noisy measurements and take the noisy output for the dsi_IO 
         if noise == "gaussian":
-            max_out, _ = torch.max(torch.abs(output), dim=0)
-            noise_level  = torch.diag(max_out - torch.mean(torch.abs(output), dim=0)) / SNR # Different noise levels to respect the SNR for each state
-            noisy_output = output + torch.matmul(torch.randn_like(output), noise_level)
+            sampled_noise = torch.std(output)*torch.randn_like(output)/SNR
+            noisy_output = sampled_noise + output
             dataset_dict["dsi_IO"] = Input_output_data(u=inputs.numpy(), y=noisy_output.numpy(), sampling_time=(sim_time[1]-sim_time[0]))
             dataset_dict["noisy_output"] = noisy_output            
         elif noise == "uniform":
@@ -152,12 +151,11 @@ if __name__ == "__main__":
     nx = 6
     nsys = 3
     M_vals = torch.FloatTensor([2, 2, 2])
-    D_vals = torch.FloatTensor([3, 3, 3])
-    K_vals = torch.FloatTensor([4, 4, 4])
+    D_vals = torch.FloatTensor([0.5, 0.5, 0.5])
+    K_vals = torch.FloatTensor([1, 1, 1])
     cD_vals = torch.FloatTensor([1, 1, 1])
 
-    datasets = generate_data(sim_time, M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=cD_vals, n_datasets=8, noise="gaussian", SNR=10, freq_band=torch.linspace(1/sim_time[-1], 150/sim_time[-1], 40))
-
+    datasets = generate_data(sim_time, M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=None, n_datasets=8, noise="gaussian", SNR=100, freq_band=torch.linspace(1/250, 150/250, 35))
     ### ====== PLOTTING ======= ###
     z = -1 # Select which dataset should be used for plotting
     inputs = datasets[z]["inputs"]
@@ -191,7 +189,7 @@ if __name__ == "__main__":
 
     ### ====== SAVING ======= ###
     # Export the dataset to torch file
-    PATH_DATA = "TEST_DATASET_GENERATED.pt"
+    PATH_DATA = "W27_CDC_40dBSNR_3MSD.pt"
     torch.save(datasets, "datasets/" + PATH_DATA)
 
     # MATLAB EXPORTS:
@@ -204,3 +202,5 @@ if __name__ == "__main__":
 
     sys = coupled_MSD(M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=None, dt=sim_time[1])
     sys.print_arguments()
+    perfect_NRMSE = torch.sqrt(torch.mean(torch.square(output - noisy_output))) / torch.std(output)
+    print(f"Perfect achievable NRMSE = {perfect_NRMSE}") 

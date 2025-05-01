@@ -34,7 +34,7 @@ def multisine_generator(t, freq_band, amplitude, n_inputs):
     for state in range(n_inputs):
         for freq in freq_band:
             phase = 2*torch.pi*torch.rand(1)
-            wave = torch.sin(freq*t + phase)
+            wave = torch.sin(2*torch.pi*freq*t + phase)
             u[:, state] = u[:, state] + wave
     u = u*(amplitude/torch.max(u))
     return u
@@ -121,7 +121,7 @@ def timeseries_splitting(data:dict|list, n_past:int, n_future:int, stride:int=1)
     if isinstance(data, list):
         u_past_full = y_past_full = u_future_full = y_future_full = torch.FloatTensor()
         for set in data:
-            u_past_set, y_past_set, u_future_set, y_future_set =  timeseries_splitting(set, n_past, n_future, stride)
+            u_past_set, y_past_set, u_future_set, y_future_set = timeseries_splitting(set, n_past, n_future, stride)
             u_past_full = torch.concat((u_past_full, u_past_set), dim=0)
             y_past_full = torch.concat((y_past_full, y_past_set), dim=0)
             u_future_full = torch.concat((u_future_full, u_future_set), dim=0)
@@ -143,7 +143,10 @@ def timeseries_splitting(data:dict|list, n_past:int, n_future:int, stride:int=1)
     u_past = torch.as_strided(u[:-n_future, :], size=(n_windows, n_past, u_dim), stride=(stride*u_dim, u_dim, 1))
     u_future = torch.as_strided(u[n_past:, :], size=(n_windows, n_future, u_dim), stride=(stride*u_dim, u_dim, 1))
 
-    y = data["output"]
+    if "noisy_output" in data.keys():   # TODO: make this clean
+        y = data["noisy_output"]
+    else:
+        y = data["output"]
     y_dim = y.shape[1]
     y_past = torch.as_strided(y[:-n_future, :], size=(n_windows, n_past, y_dim), stride=(stride*y_dim, y_dim, 1))
     y_future = torch.as_strided(y[n_past:, :], size=(n_windows, n_future, y_dim), stride=(stride*y_dim, y_dim, 1))
@@ -327,42 +330,54 @@ class simple_res_NN(nn.Module):
 
 ### State-independent PHNN subnetworks ###
 class constant_J_net(nn.Module):
-    def __init__(self, system_dim):
+    def __init__(self, system_dim, init_data=None):
         super().__init__()
         self.system_dim = system_dim
         self.nJ = 0
 
         for dim in system_dim:
             self.nJ += int((dim[0]**2 - dim[0]) / 2)
-        self.J_vals = nn.Parameter(data=torch.rand(self.nJ), requires_grad=True) #TODO: Think about normalization (to fix stuff like R >> J)
+        if init_data is not None:
+            self.J_vals = nn.Parameter(data=init_data, requires_grad=True)
+        else:
+            self.J_vals = nn.Parameter(data=torch.rand(self.nJ), requires_grad=True)
+        #TODO: Think about normalization (to fix stuff like R >> J)
 
     def forward(self, x):
         return blockify_J(self.system_dim, self.J_vals.view(1, -1))
 
 
 class constant_R_net(nn.Module):
-    def __init__(self, system_dim):
+    def __init__(self, system_dim, init_data=None):
         super().__init__()
         self.system_dim = system_dim
         self.nR = 0
 
         for dim in system_dim:
             self.nR += dim[0]*dim[0]
-        self.R_vals = nn.Parameter(data=torch.rand(self.nR), requires_grad=True)  #TODO: Think about normalization (to fix stuff like R >> J)
+        if init_data is not None:
+            self.R_vals = nn.Parameter(data=init_data, requires_grad=True)
+        else:
+            self.R_vals = nn.Parameter(data=torch.rand(self.nR), requires_grad=True) 
+        #TODO: Think about normalization (to fix stuff like R >> J)
     
     def forward(self, x):
         return blockify_R(self.system_dim, self.R_vals.view(1, -1))
 
 
 class constant_G_net(nn.Module):
-    def __init__(self, system_dim):
+    def __init__(self, system_dim, init_data=None):
         super().__init__()
         self.system_dim = system_dim
         self.nG = 0
 
         for dim in system_dim:
             self.nG += dim[0]*dim[1]
-        self.G_vals = nn.Parameter(data=torch.rand(self.nG), requires_grad=True) #TODO: Think about normalization (to fix stuff like u >> x)
+        if init_data is not None:
+            self.G_vals = nn.Parameter(data=init_data, requires_grad=True)
+        else:
+            self.G_vals = nn.Parameter(data=torch.rand(self.nG), requires_grad=True) 
+        #TODO: Think about normalization (to fix stuff like u >> x)
     
     def forward(self, x):
         return blockify_G(self.system_dim, self.G_vals.view(1, -1))
@@ -377,6 +392,24 @@ class constant_H_net(nn.Module):
     
     def forward(self, x):
         return torch.einsum("i, bi -> bi", self.H_vals, x)
+
+
+class constant_Q_net(nn.Module):
+    def __init__(self, system_dim, init_data=None):
+        super().__init__()
+        self.system_dim = system_dim
+        self.nQ = 0
+
+        for dim in system_dim:
+            self.nQ += dim[0]*dim[0]
+        if init_data is not None:
+            self.Q_vals = nn.Parameter(data=init_data, requires_grad=True)
+        else:
+            self.Q_vals = nn.Parameter(data=torch.rand(self.nQ), requires_grad=True) 
+        #TODO: Think about normalization (to fix stuff like R >> J)
+    
+    def forward(self, x):
+        return blockify_R(self.system_dim, self.Q_vals.view(1, -1)) # For now we just use the blockify R function to achieve sym, pos, semi-def matrix
 
 
 ### Variable PHNN subnetworks ###
@@ -534,4 +567,50 @@ def plot_matrix_heatmap(matrix, name=""):
                         ha="center", va="center", color="k")
     plt.title("Heatmap of " + name)
     plt.colorbar(im)
+    plt.show()
+
+
+def plot_PH_matrices(E=None, Q=None, J=None, R=None, G=None, P=None, S=None, N=None, size=3.5, title=None):
+    # Store only the presented matrices
+    mat_list = [E, J, G, S, Q, R, P, N]
+    name_list = ["E", "J", "G", "S", "Q", "R", "P", "N"]
+    mat_list_red =  [x for x in mat_list if x is not None]
+    name_list_red = [name_list[i] for i in range(len(mat_list)) if mat_list[i] is not None]
+    print(f"Given matrices: {name_list_red}")
+    x_dim, u_dim = G.shape
+    width_list = [size*x_dim, size*x_dim, size*u_dim, size*u_dim]
+    height_list = [size*x_dim, size*x_dim]
+    # TODO Adapt positions with sizes
+
+    # Determine amount of rows/ cols to display
+    n_mat = len(mat_list_red)
+    n_col = int(n_mat / 2) + (n_mat % 2 > 0)
+    figure, ax = plt.subplots(2, n_col, figsize=(n_col*size, 2*size), gridspec_kw={"width_ratios":width_list[:n_col], "height_ratios":height_list})
+    if n_mat % 2 == 1:
+        # There is an uneven amount of matrices
+        figure.delaxes(ax[1, int(n_mat/2)])
+    
+    # Display the matrices over the subplots
+    for mat_i in range(n_mat):
+        if mat_i < n_col:   # First row
+            ax[0, mat_i].set_title(name_list_red[mat_i])
+            im = ax[0, mat_i].imshow(mat_list_red[mat_i], cmap='RdYlGn')
+            if torch.max(mat_list_red[mat_i]) <= 100:
+                for i in range(mat_list_red[mat_i].shape[0]):
+                    for j in range(mat_list_red[mat_i].shape[1]):
+                        ax[0, mat_i].text(j, i, round(mat_list_red[mat_i][i, j].item(), 2),
+                                ha="center", va="center", color="k")
+            plt.colorbar(im)
+        else:   # Second row
+            ax[1, mat_i-n_col].set_title(name_list_red[mat_i])
+            im = ax[1, mat_i-n_col].imshow(mat_list_red[mat_i], cmap='RdYlGn')
+            if torch.max(mat_list_red[mat_i]) <= 100:
+                for i in range(mat_list_red[mat_i].shape[0]):
+                    for j in range(mat_list_red[mat_i].shape[1]):
+                        ax[1, mat_i-n_col].text(j, i, round(mat_list_red[mat_i][i, j].item(), 2),
+                                ha="center", va="center", color="k")
+            plt.colorbar(im)
+    # ax[i, j] is row, col location subplot
+    if title is not None:
+        figure.suptitle(title)
     plt.show()

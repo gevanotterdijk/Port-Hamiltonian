@@ -12,7 +12,7 @@ from nonlinear_benchmarks import Input_output_data
 
 """
 Goal:   This file is to take the measured system data from MSD-datagen and recover a PH model from it.
-Method: Creata PHNN-subnet class, that can be trained in a separate validation file.
+Method: Create a PHNN-subnet class, that can be trained in a separate validation file.
 """
 
 class custom_PHNN(nn.Module):
@@ -35,7 +35,7 @@ class custom_PHNN(nn.Module):
         self.Jnet = var_J_net(system_dim, **Jnet_kwargs) if Jnet=="nonlin" else Jnet
         self.Rnet = var_R_net(system_dim, **Rnet_kwargs) if Rnet=="nonlin" else Rnet
         self.Gnet = var_G_net(system_dim, **Gnet_kwargs) if Gnet=="nonlin" else Gnet
-        self.Hnet = var_H_net(system_dim, **Hnet_kwargs) if Hnet=="nonlin" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
+        self.Hnet = var_H_net(system_dim, **Hnet_kwargs) if Hnet=="nonlin" else Hnet
 
         # Define the encoder NN
         self.enc_net = simple_res_NN(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_layers=2)
@@ -103,14 +103,32 @@ class linear_PHNN(custom_PHNN):
         self.Hnet = constant_H_net(system_dim=system_dim) if Hnet=="con" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
 
         # Define the encoder NN (0 hidden layers --> linear)
-        self.enc_net = simple_res_NN(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_hidden_layers=0)
+        self.enc_net = simple_res_NN(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_layers=2)
 
     def get_matrices(self, x):
+        dim = int(self.xc_dim/2)
+        bs = x.shape[0]
         # Direct determination of dHdx
         J = self.Jnet(x)
         R = self.Rnet(x)
         G = self.Gnet(x)
-        dHdx = self.Hnet(x)
+        #dHdx = self.Hnet(x)
+
+        #J = torch.zeros(self.xc_dim, self.xc_dim)
+        #J[:dim, dim:] = torch.eye(dim)
+        #J[dim:, :dim] = -torch.eye(dim)
+        #J = J.expand(bs, self.xc_dim, self.xc_dim)
+
+        #G = torch.cat((torch.zeros(self.sigc_dim, self.sigc_dim), torch.eye(self.sigc_dim)), dim=0) # Might run into issues here when sigc dim is not exactly half xc_dim
+        #G = G.expand(bs, self.xc_dim, self.sigc_dim)
+
+        Q = torch.zeros(self.xc_dim, self.xc_dim) 
+        Q[:dim, :dim] = DK_matrix_form(torch.FloatTensor([1, 1, 1]))              # Potential energy
+        Q[dim:, dim:] = torch.inverse(torch.diag(torch.FloatTensor([2, 2, 2])))   # Kinetic energy
+        Qx = torch.einsum("ij, bj -> bi", Q, x)             # First compute Q*x
+        #H = 0.5*torch.einsum("bj, bi -> b", x, Qx)         # H = 0.5*x*Q*x
+        dHdx = Qx.expand(bs, self.xc_dim)                   # dHdx = Q*x
+
         return J, R, G, dHdx
 
 
@@ -132,7 +150,7 @@ class cheat_PHNN(custom_PHNN):
         J = J.expand(bs, self.xc_dim, self.xc_dim)      # Match batch sizes
 
         R = torch.zeros(self.xc_dim, self.xc_dim)
-        R[dim:, dim:] = self.D                          # WATCH OUT!!! R == D, so since we take -R, we also get -D
+        R[dim:, dim:] = DK_matrix_form(self.D)          # WATCH OUT!!! R == D, so since we take -R, we also get -D
         R = R.expand(bs, self.xc_dim, self.xc_dim)      # Match batch sizes
         if self.cubic:
             qdot = torch.zeros(x.shape[0], self.xc_dim)
@@ -146,11 +164,11 @@ class cheat_PHNN(custom_PHNN):
         G = G.expand(bs, self.xc_dim, self.sigc_dim)    # Match batch sizes
 
         Q = torch.zeros(self.xc_dim, self.xc_dim) 
-        Q[:dim, :dim] = self.K                          # Potential energy
-        Q[dim:, dim:] = self.M/4                        # Kinetic energy
-        Qx = torch.einsum("ij, bj -> bi", Q, x)         # First compute Q*x
-        #H = 0.5*torch.einsum("bj, bi -> b", x, Qx)     # H = 0.5*x*Q*x
-        dHdx = Qx.expand(bs, self.xc_dim)               # dHdx = Q*x
+        Q[:dim, :dim] = DK_matrix_form(self.K)              # Potential energy
+        Q[dim:, dim:] = torch.inverse(torch.diag(self.M))   # Kinetic energy
+        Qx = torch.einsum("ij, bj -> bi", Q, x)             # First compute Q*x
+        #H = 0.5*torch.einsum("bj, bi -> b", x, Qx)         # H = 0.5*x*Q*x
+        dHdx = Qx.expand(bs, self.xc_dim)                   # dHdx = Q*x
         return J, R, G, dHdx
 
 
@@ -218,39 +236,42 @@ def fit_model(model:nn.Module, train_data:dict|list, val_data:dict|list, n_its:i
     
     # Initialize storage
     best_val, best_model_sd = float('inf'), model.state_dict()
-    losses = torch.zeros(n_its)
-    losses_val = torch.zeros(n_its)
+    NRMSE_losses = torch.zeros(n_its)
+    NRMSE_losses_val = torch.zeros(n_its)
 
     # Training procedure
-    for it, batch in zip(tqdm(range(n_its)), itter):
-        # Training step
-        optimizer.zero_grad()
-        
-        ysim = model(batch[0], batch[1], batch[2])  # runs model.forward(u_past, y_past, u_future)
-        loss = loss_fn(ysim, batch[3])
-        loss_norm_factor = torch.max(torch.abs(batch[3])) - torch.min(torch.abs(batch[3])) #Normalization
-        losses[it] = loss.detach().numpy() / loss_norm_factor
-        
-        loss.backward()
-        optimizer.step()
+    try:
+        for it, batch in zip(tqdm(range(n_its)), itter):
+            # Training step
+            optimizer.zero_grad()
+            
+            ysim = model(batch[0], batch[1], batch[2])  # runs model.forward(u_past, y_past, u_future)
+            loss = loss_fn(ysim, batch[3])
+            NRMSE_losses[it] = torch.sqrt(loss.detach()) / torch.std(batch[3])
+            if torch.isnan(NRMSE_losses[it]):
+                print("Training loss became NaN. Terminating training sequence.")
+                break
+            loss.backward()
+            optimizer.step()
 
-        # Validation step
-        if it % val_freq == 0:
-            with torch.no_grad():
-                ysim_val = model(arrays_val[0], arrays_val[1], arrays_val[2])
-                loss_val = loss_fn(ysim_val, arrays_val[3])
-                loss_val_norm_factor = torch.max(torch.abs(arrays_val[3])) - torch.min(torch.abs(arrays_val[3]))  #Normalization
-                losses_val[it] = loss_val / loss_val_norm_factor
+            # Validation step
+            if it % val_freq == 0:
+                with torch.no_grad():
+                    ysim_val = model(arrays_val[0], arrays_val[1], arrays_val[2])
+                    loss_val = loss_fn(ysim_val, arrays_val[3])
+                    NRMSE_losses_val[it] = torch.sqrt(loss_val.detach()) / torch.std(arrays_val[3])
+                    
                 # Save the best model
-                if losses_val[it] < best_val:
-                    best_val = losses_val[it]
-                    best_model_sd = model.state_dict()
-            if losses_val[it] == best_val:
-                print(f'Iteration {it:7,}, with training loss (NRMSE): {losses[it].detach().numpy():.5f} and validation loss (NRMSE): {losses_val[it]:.5f} === NEW BEST VALIDATION!')
-            else:
-                print(f'Iteration {it:7,}, with training loss (NRMSE): {losses[it].detach().numpy():.5f} and validation loss (NRMSE): {losses_val[it]:.5f}')
+                if NRMSE_losses_val[it] < best_val:
+                    best_val = NRMSE_losses_val[it]
+                    best_model_sd = deepcopy(model.state_dict())    # Use deepcopy here to prevent overwriting the best model with the last model
+                    print(f'Iteration {it:7,}, with training loss (NRMSE): {NRMSE_losses[it].detach().numpy():.5f} and validation loss (NRMSE): {NRMSE_losses_val[it]:.5f} === NEW BEST VALIDATION!')
+                else:
+                    print(f'Iteration {it:7,}, with training loss (NRMSE): {NRMSE_losses[it].detach().numpy():.5f} and validation loss (NRMSE): {NRMSE_losses_val[it]:.5f}')
+    except KeyboardInterrupt:
+        print('Stopping early due to KeyboardInterrupt')    
     model.load_state_dict(best_model_sd) # Continue with the best state dict
-    return losses, losses_val, best_model_sd
+    return NRMSE_losses, NRMSE_losses_val, best_model_sd
 
 
 if __name__ == "__main__":

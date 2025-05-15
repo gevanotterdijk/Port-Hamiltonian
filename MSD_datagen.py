@@ -122,6 +122,7 @@ def generate_data(sim_time, M_vals, D_vals, K_vals,
         # Save simulation as a list of dataset dictionaries
         dsi_IO = Input_output_data(u=inputs.numpy(), y=output.numpy(), sampling_time=(sim_time[1]-sim_time[0]))
         dataset_dict = {
+            "sim_time":sim_time,
             "inputs":inputs,
             "states":states,
             "output":output,
@@ -155,7 +156,7 @@ if __name__ == "__main__":
     K_vals = torch.FloatTensor([1, 1, 1])
     cD_vals = torch.FloatTensor([1, 1, 1])
 
-    datasets = generate_data(sim_time, M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=None, n_datasets=8, noise="gaussian", SNR=100, freq_band=torch.linspace(1/250, 150/250, 35))
+    datasets = generate_data(sim_time, M_vals=M_vals, D_vals=D_vals, K_vals=K_vals, cubic_D=None, n_datasets=8, noise="gaussian", SNR=10, freq_band=torch.linspace(1/250, 150/250, 35))
     ### ====== PLOTTING ======= ###
     z = -1 # Select which dataset should be used for plotting
     inputs = datasets[z]["inputs"]
@@ -189,7 +190,7 @@ if __name__ == "__main__":
 
     ### ====== SAVING ======= ###
     # Export the dataset to torch file
-    PATH_DATA = "W27_CDC_40dBSNR_3MSD.pt"
+    PATH_DATA = "TEST_DATASET_GENERATED.pt"
     torch.save(datasets, "datasets/" + PATH_DATA)
 
     # MATLAB EXPORTS:

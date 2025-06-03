@@ -52,6 +52,7 @@ def DK_matrix_form(vals):
 
 
 def cubic_D_matrix_form(x, D_vals, M_mat = None):
+    # TODO: Fix for the batched case
     dim = len(D_vals)
     mat = torch.zeros(dim, dim)
     

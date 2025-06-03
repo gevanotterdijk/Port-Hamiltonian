@@ -133,12 +133,12 @@ class linear_PHNN(custom_PHNN):
 
 
 class cheat_PHNN(custom_PHNN):
-    def __init__(self, system_dim, na, nb, dt, M=None, D=None, K=None, cubic=False):
+    def __init__(self, system_dim, na, nb, dt, M=None, D=None, K=None, cubic_D=None):
         super().__init__(system_dim, na, nb, dt)
-        self.cubic = cubic
-        self.M = torch.eye(int(self.xc_dim/2)) if M is None else M
-        self.D = torch.eye(int(self.xc_dim/2)) if D is None else D
-        self.K = torch.eye(int(self.xc_dim/2)) if K is None else K
+        self.M_mat = torch.eye(int(self.xc_dim/2)) if M is None else torch.diag(M)
+        self.D_mat = torch.eye(int(self.xc_dim/2)) if D is None else DK_matrix_form(D)
+        self.K_mat = torch.eye(int(self.xc_dim/2)) if K is None else DK_matrix_form(K)
+        self.cubic_D = cubic_D
 
     def get_matrices(self, x):
         dim = int(self.xc_dim/2)
@@ -150,22 +150,20 @@ class cheat_PHNN(custom_PHNN):
         J = J.expand(bs, self.xc_dim, self.xc_dim)      # Match batch sizes
 
         R = torch.zeros(self.xc_dim, self.xc_dim)
-        R[dim:, dim:] = DK_matrix_form(self.D)          # WATCH OUT!!! R == D, so since we take -R, we also get -D
+        R[dim:, dim:] = self.D_mat                      # WATCH OUT!!! R == D, so since we take -R, we also get -D
         R = R.expand(bs, self.xc_dim, self.xc_dim)      # Match batch sizes
-        if self.cubic:
-            qdot = torch.zeros(x.shape[0], self.xc_dim)
-            qdot[:, dim:] = torch.einsum("ij, bj -> bi", torch.inverse(self.M), x[:, dim:])
-            qdot = torch.diag_embed(qdot)               # Note the torch.diag_embed for batched diagonalisation!
-            Rx = torch.einsum("bij, bjk -> bik", R, qdot)
-            Rx2 = torch.einsum("bij, bjk -> bik", qdot, Rx)
-            R = Rx2
+        if self.cubic_D is not None: # Only run the cubic formation if there actually is cubic damping.
+            R_cubic = torch.zeros([bs, self.xc_dim, self.xc_dim])
+            for i in range(bs): # Absolutely scuffed method, but we dont need to train this anyway :)
+                R_cubic[i, int(self.xc_dim/2):, int(self.xc_dim/2):] = cubic_D_matrix_form(x[i, :], self.cubic_D, self.M_mat)   # Includes transformation from x = [q p] to x_tilde = qdot
+            R = R + R_cubic
         
         G = torch.cat((torch.zeros(self.sigc_dim, self.sigc_dim), torch.eye(self.sigc_dim)), dim=0) # Might run into issues here when sigc dim is not exactly half xc_dim
         G = G.expand(bs, self.xc_dim, self.sigc_dim)    # Match batch sizes
 
         Q = torch.zeros(self.xc_dim, self.xc_dim) 
-        Q[:dim, :dim] = DK_matrix_form(self.K)              # Potential energy
-        Q[dim:, dim:] = torch.inverse(torch.diag(self.M))   # Kinetic energy
+        Q[:dim, :dim] = self.K_mat                          # Potential energy
+        Q[dim:, dim:] = torch.inverse(self.M_mat)           # Kinetic energy
         Qx = torch.einsum("ij, bj -> bi", Q, x)             # First compute Q*x
         #H = 0.5*torch.einsum("bj, bi -> b", x, Qx)         # H = 0.5*x*Q*x
         dHdx = Qx.expand(bs, self.xc_dim)                   # dHdx = Q*x

@@ -100,7 +100,7 @@ class linear_PHNN(custom_PHNN):
         self.Jnet = constant_J_net(system_dim=system_dim) if Jnet=="con" else Jnet
         self.Rnet = constant_R_net(system_dim=system_dim) if Rnet=="con" else Rnet
         self.Gnet = constant_G_net(system_dim=system_dim) if Gnet=="con" else Gnet
-        self.Hnet = constant_H_net(system_dim=system_dim) if Hnet=="con" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
+        self.Qnet = constant_H_net(system_dim=system_dim) if Hnet=="con" else Hnet # Only constant net that depends on x (quadratic Hamiltonian --> linear dHdx)
 
         # Define the encoder NN (0 hidden layers --> linear)
         self.enc_net = simple_res_NN(n_in=self.na*self.sigc_dim+self.nb*self.sigc_dim, n_out=self.xc_dim, n_layers=2)
@@ -112,7 +112,7 @@ class linear_PHNN(custom_PHNN):
         J = self.Jnet(x)
         R = self.Rnet(x)
         G = self.Gnet(x)
-        #dHdx = self.Hnet(x)
+        dHdx = self.Hnet(x)
 
         #J = torch.zeros(self.xc_dim, self.xc_dim)
         #J[:dim, dim:] = torch.eye(dim)
@@ -253,7 +253,7 @@ def fit_model(model:nn.Module, train_data:dict|list, val_data:dict|list, n_its:i
             optimizer.step()
 
             # Validation step
-            if it % val_freq == 0:
+            if it % val_freq == val_freq-1:
                 with torch.no_grad():
                     ysim_val = model(arrays_val[0], arrays_val[1], arrays_val[2])
                     loss_val = loss_fn(ysim_val, arrays_val[3])
@@ -261,15 +261,38 @@ def fit_model(model:nn.Module, train_data:dict|list, val_data:dict|list, n_its:i
                     
                 # Save the best model
                 if NRMSE_losses_val[it] < best_val:
-                    best_val = NRMSE_losses_val[it]
+                    best_val = NRMSE_losses_val[it+1]
                     best_model_sd = deepcopy(model.state_dict())    # Use deepcopy here to prevent overwriting the best model with the last model
-                    print(f'Iteration {it:7,}, with training loss (NRMSE): {NRMSE_losses[it].detach().numpy():.5f} and validation loss (NRMSE): {NRMSE_losses_val[it]:.5f} === NEW BEST VALIDATION!')
+                    print(f'Iteration {it+1:7,}, with training loss (NRMSE): {NRMSE_losses[it].detach().numpy():.5f} and validation loss (NRMSE): {NRMSE_losses_val[it]:.5f} === NEW BEST VALIDATION!')
                 else:
-                    print(f'Iteration {it:7,}, with training loss (NRMSE): {NRMSE_losses[it].detach().numpy():.5f} and validation loss (NRMSE): {NRMSE_losses_val[it]:.5f}')
+                    print(f'Iteration {it+1:7,}, with training loss (NRMSE): {NRMSE_losses[it].detach().numpy():.5f} and validation loss (NRMSE): {NRMSE_losses_val[it]:.5f}')
     except KeyboardInterrupt:
         print('Stopping early due to KeyboardInterrupt')    
     model.load_state_dict(best_model_sd) # Continue with the best state dict
     return NRMSE_losses, NRMSE_losses_val, best_model_sd
+
+
+def multi_fit(model, train_data, val_data, T_list:list, iterations:int, val_freq:int, lr=1e-3, PATH_TRAINED_MODEL:str="TEMP"):
+    loss = torch.FloatTensor([])
+    val_loss = torch.FloatTensor([])
+    for i, T_i in enumerate(T_list):
+        # Run the training steps
+        print(f"Start training for window length: {T_i}")
+        loss_i, val_loss_i, best_sd_i = fit_model(model, train_data, val_data, n_its=iterations, n_future=T_i, val_freq=val_freq, lr=1e-3)
+        print(f"Best loss for window length {T_i} is: {torch.min(loss_i)} at iteration {torch.argmin(loss_i)+1}")
+        print(f"Best validation loss for window length {T_i} is: {torch.min(val_loss_i[val_loss_i.nonzero()])} at iteration {(torch.argmin(val_loss_i[val_loss_i.nonzero()])+1)*val_freq}")
+        
+        # Update and save the training progression
+        loss = torch.cat((loss, loss_i), dim=0)
+        val_loss = torch.cat((val_loss, val_loss_i), dim=0)
+        step_train = {
+        "train_loss":loss, 
+        "val_loss":val_loss,
+        "state_dict":best_sd_i,
+        "T_list":T_list
+        }
+        torch.save(step_train, PATH_TRAINED_MODEL[:-3] + "_epoch_" + str(iterations*(i+1)) + ".pt")
+    return loss, val_loss, deepcopy(model.state_dict())
 
 
 if __name__ == "__main__":

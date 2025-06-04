@@ -261,7 +261,7 @@ def fit_model(model:nn.Module, train_data:dict|list, val_data:dict|list, n_its:i
                     
                 # Save the best model
                 if NRMSE_losses_val[it] < best_val:
-                    best_val = NRMSE_losses_val[it+1]
+                    best_val = NRMSE_losses_val[it]
                     best_model_sd = deepcopy(model.state_dict())    # Use deepcopy here to prevent overwriting the best model with the last model
                     print(f'Iteration {it+1:7,}, with training loss (NRMSE): {NRMSE_losses[it].detach().numpy():.5f} and validation loss (NRMSE): {NRMSE_losses_val[it]:.5f} === NEW BEST VALIDATION!')
                 else:

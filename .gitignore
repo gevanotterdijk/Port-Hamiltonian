@@ -167,3 +167,6 @@ models
 matlabIO
 remote PC
 _deprecated
+
+# WIP files
+experiments.ipynb
